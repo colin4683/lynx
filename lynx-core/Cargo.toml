@@ -1,0 +1,17 @@
+[package]
+name = "lynx-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = {version = "1.0", features = ["full"]}
+tonic = "0.13.1" # gRPC framework
+prost = "0.13.5" # Protobuf codegen
+sqlx = {version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "chrono"]}
+chrono = "0.4.41"
+dotenv = "0.15.0"
+uuid = { version = "1.17.0", features = ["v4"] }
+
+[build-dependencies]
+prost-build = "0.13.5"
+tonic-build = "0.13.1"

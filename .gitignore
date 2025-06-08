@@ -1,0 +1,13 @@
+lynx-agent/target
+lynx-agent/.idea
+lynx-agent/Cargo.lock
+lynx-agent/config.toml
+
+lynx-core/target
+lynx-core/.idea
+lynx-core/.sqlx
+lynx-core/Cargo.lock
+lynx-core/config.toml
+lynx-core/.env
+
+.idea

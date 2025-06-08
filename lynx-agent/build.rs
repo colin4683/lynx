@@ -1,5 +1,10 @@
-
-fn main() -> Result<()> {
-    prost_build::compile_protos(&["src/items.proto"], &["src/"])?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::configure()
+        .build_server(false)
+        .out_dir("src/proto")
+        .compile_protos(
+            &["proto/monitor.proto"],
+            &["proto"],
+        )?;
     Ok(())
 }

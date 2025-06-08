@@ -1,0 +1,3 @@
+[core]
+server_url = "grpc://localhost:50051"
+agent_key = "testing"
