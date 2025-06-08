@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package monitor;
+
+service SystemMonitor {
+    rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
+}
+
+message MetricsRequest {
+    string hostname = 1;
+    CpuStats cpu = 2;
+    MemoryStats memory = 3;
+}
+
+message CpuStats {
+    double usage_percent = 1;
+    double temperature_c = 2;
+}
+
+message MemoryStats {
+    uint64 total_bytes = 1;
+    uint64 used_bytes = 2;
+    uint64 free_bytes = 3;
+}
+
+message MetricsResponse {
+    string status = 1;
+    string message = 2;
+}
