@@ -9,6 +9,7 @@ use toml::Table;
 use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
+use crate::proto::monitor::Component;
 
 #[derive(Deserialize, Debug)]
 pub struct CoreConfig {
@@ -71,6 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             total_kb: total_memory,
             free_kb: total_memory,
         };
+        
+        let hostname = sysinfo::System::host_name().unwrap_or("unknown".to_string());
 
         let num_cpus = sys.cpus().len();
         // sleep for CPU to update
@@ -83,8 +86,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         /*
         System Info:
-        * Hostname
-        * OS
+        * Hostname [x]
+        * OS [x]
         * Uptime
         * Kernel version
         * CPU model / count
@@ -96,29 +99,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         * Memory usage [x]
         * Docker memory usage
         * Disk usage [x]
-        * Disk I/O
+        * Disk I/O [x]
         * Bandwidth usage
         * Docker bandwidth usage
-        * Temperature (dump sysinfo components)
+        * Temperature (dump sysinfo components) [x]
         * GPU[n] usage (if available)
         * GPU[n] temperature (if available)
          */
 
         // - cpu / components
         let cpu = sys.global_cpu_usage() / num_cpus as f32;
-        let components = Components::new_with_refreshed_list();
-        let temperature = components
-            .iter()
-            .find(|c| {
-                c.label().contains("CPU")
-                    || c.label().contains("Tdie")
-                    || c.label().contains("Tctl")
-            })
-            .map(|c| c.temperature());
         
+        let components = Components::new_with_refreshed_list();
+        let components_dump = components.iter()
+            .map(|c| {
+                let temp = c.temperature().unwrap_or(0.0);
+                Component {
+                    label: c.label().to_string(),
+                    temperature: temp,
+                }
+            })
+            .collect::<Vec<Component>>();
         let cpu_stats = CpuStats {
            usage_percent: cpu as f64,
         };
+        
+        let cpuName = sys.cpus().get(0)
+            .map(|cpu| cpu.brand().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
 
         let sys_disks = sysinfo::Disks::new_with_refreshed_list();
         let mut sys_disks = sys_disks.into_iter()
@@ -148,15 +156,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         // create request
         let request = tonic::Request::new(proto::monitor::MetricsRequest {
-            hostname: "127.0.0.1".to_string(),
+            hostname,
             os: os.to_string(),
             cpu_count: num_cpus as u32,
-            cpu_model: "unknown".to_string(),
+            cpu_model: cpuName,
             kernel_version: "".to_string(),
             uptime_seconds: uptime,
             memory_stats: Some(memory_stats),
             cpu_stats: Some(cpu_stats),
-            disk_stats: disks
+            disk_stats: disks,
+            components: components_dump
         });
 
         // send request

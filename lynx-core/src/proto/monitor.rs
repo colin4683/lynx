@@ -19,6 +19,8 @@ pub struct MetricsRequest {
     pub memory_stats: ::core::option::Option<MemoryStats>,
     #[prost(message, repeated, tag = "10")]
     pub disk_stats: ::prost::alloc::vec::Vec<DiskStats>,
+    #[prost(message, repeated, tag = "11")]
+    pub components: ::prost::alloc::vec::Vec<Component>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CpuStats {
@@ -48,6 +50,13 @@ pub struct DiskStats {
     pub read_bytes: i32,
     #[prost(int32, tag = "6")]
     pub write_bytes: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Component {
+    #[prost(string, tag = "1")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(float, tag = "2")]
+    pub temperature: f32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MetricsResponse {
