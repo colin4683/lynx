@@ -1,0 +1,65 @@
+@import 'tailwindcss';
+@plugin "@iconify/tailwind4";
+
+
+* {
+    --background: #121212;
+    --background-alt: #232323;
+    --foreground: #18191b;
+    --border: #393b39;
+    --text: #f0f0f0;
+    --primary: #a8ed83;
+    --secondary: rgba(108, 145, 88, 0.45);
+}
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter' sans-serif;
+    background-color: var(--background);
+    color: var(--text);
+}
+
+table {
+    border: 1px solid #393B39;
+    background-color: #232323;
+    width: 100%;
+    text-align: center;
+    border-collapse: collapse;
+}
+table td, table th {
+    border: 1px solid #393B39;
+    padding: 4px 3px;
+}
+table tbody td {
+    font-size: 15px;
+    color: #ECECEC;
+}
+table tr:nth-child(even) {
+    background: #121212;
+}
+table thead {
+    background: #18191B;
+    background: -moz-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
+    background: -webkit-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
+    background: linear-gradient(to bottom, #121212 0%, #18191B 66%, #121212 100%);
+    border-bottom: 2px solid rgba(168, 237, 131, 0.48);
+}
+table thead th {
+    font-size: 15px;
+    font-weight: bold;
+    color: #FFFFFF;
+    text-align: center;
+}
+table tfoot td {
+    font-size: 14px;
+}
+table tfoot .links {
+    text-align: right;
+}
+table tfoot .links a{
+    display: inline-block;
+    background: var(--secondary);
+    color: #FFFFFF;
+    padding: 2px 8px;
+    border-radius: 5px;
+}

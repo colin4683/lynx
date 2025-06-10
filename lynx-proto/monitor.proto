@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package monitor;
+
+service SystemMonitor {
+    rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
+}
+
+message MetricsRequest {
+    string hostname = 1;
+    string os = 3;
+    uint64 uptime_seconds = 4;
+    string kernel_version = 5;
+    string cpu_model = 6;
+    uint32 cpu_count = 7;
+    CpuStats cpu_stats = 8;
+    MemoryStats memory_stats = 9;
+    repeated DiskStats disk_stats = 10;
+    repeated Component components = 11;
+}
+
+message CpuStats {
+    double usage_percent = 1;
+}
+
+message MemoryStats {
+    uint64 total_kb = 1;
+    uint64 used_kb = 2;
+    uint64 free_kb = 3;
+}
+
+message DiskStats {
+    string name = 1;
+    int32 total_space = 2;
+    int32 used_space = 3;
+    string unit = 4;
+    int32 read_bytes = 5;
+    int32 write_bytes = 6;
+}
+
+message Component {
+    string label = 1;
+    float temperature = 2;
+}
+
+message MetricsResponse {
+    string status = 1;
+    string message = 2;
+}

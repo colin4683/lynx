@@ -1,1 +1,0 @@
-htmx.config.apiEndpoint = "http://localhost:8080";
