@@ -4,19 +4,25 @@ package monitor;
 
 service SystemMonitor {
     rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
+    rpc GetSystemInfo (SystemInfoRequest) returns (SystemInfoResponse);
+}
+
+message SystemInfoRequest {
+    string hostname = 1;
+    string os = 2;
+    uint64 uptime_seconds = 3;
+    string kernel_version = 4;
+    string cpu_model = 5;
+    uint32 cpu_count = 6;
 }
 
 message MetricsRequest {
-    string hostname = 1;
-    string os = 3;
-    uint64 uptime_seconds = 4;
-    string kernel_version = 5;
-    string cpu_model = 6;
-    uint32 cpu_count = 7;
     CpuStats cpu_stats = 8;
     MemoryStats memory_stats = 9;
     repeated DiskStats disk_stats = 10;
     repeated Component components = 11;
+    NetworkStats network_stats = 12;
+    LoadAverage load_average = 13;
 }
 
 message CpuStats {
@@ -34,8 +40,20 @@ message DiskStats {
     int32 total_space = 2;
     int32 used_space = 3;
     string unit = 4;
-    int32 read_bytes = 5;
-    int32 write_bytes = 6;
+    double read_bytes = 5;
+    double write_bytes = 6;
+    string mount_point = 7;
+}
+
+message LoadAverage {
+    double one_minute = 1;
+    double five_minutes = 2;
+    double fifteen_minutes = 3;
+}
+
+message NetworkStats {
+    uint64 in = 1;
+    uint64 out = 2;
 }
 
 message Component {
@@ -46,4 +64,10 @@ message Component {
 message MetricsResponse {
     string status = 1;
     string message = 2;
+}
+
+message SystemInfoResponse {
+    string status = 1;
+    string message = 2;
+
 }
