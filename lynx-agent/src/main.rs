@@ -1,15 +1,45 @@
+mod lib;
 mod proto;
+use std::env;
+use crate::proto::monitor::{Component, LoadAverage, MetricsRequest, SystemInfoRequest};
 use proto::monitor::system_monitor_client::SystemMonitorClient;
-use proto::monitor::{CpuStats, MemoryStats, };
 use serde::Deserialize;
 use std::fmt::Debug;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate};
-use toml::Table;
+use env_logger::Env;
+use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System};
+use tokio::time::Instant;
 use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
-use crate::proto::monitor::Component;
+use log::{info, warn, error};
+use dotenv::dotenv;
+
+#[derive(Clone)]
+pub struct SystemInstance {
+    inner: Arc<Mutex<System>>
+}
+
+impl SystemInstance {
+    pub fn new() -> Self {
+        let system = System::new_all();
+        Self {
+            inner: Arc::new(Mutex::new(system))
+        }
+    }
+
+    pub fn refresh_and_get<F, R>(&self, refresh: bool, f: F) -> R
+    where
+        F: FnOnce(&mut System) -> R,
+    {
+        let mut sys = self.inner.lock().unwrap();
+        if refresh {
+            sys.refresh_all();
+        }
+        f(&mut sys)
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct CoreConfig {
@@ -36,149 +66,121 @@ impl Interceptor for AuthInterceptor {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // load config
-    let config_str = std::fs::read_to_string("config.toml")?;
-    let config: LynxConfig = toml::from_str(&config_str)?;
+enum CollectorRequest {
+    metrics(MetricsRequest),
+    sysinfo(SystemInfoRequest)
+}
 
-    let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
-    .connect()
-    .await?;
-
-    let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
-
-    let mut sys = sysinfo::System::new_all();
-    let host = sysinfo::System::host_name()
-        .unwrap_or_else(|| "unknown".to_string());
-    let os_version = sysinfo::System::os_version()
-        .unwrap_or_else(|| "0.0.0".to_string());
-    let os = sysinfo::System::distribution_id();
-    let kernal = sysinfo::System::kernel_version()
-        .unwrap_or_else(|| "0.0.0".to_string());
-    
-    
-
+async fn metric_collector(tx: mpsc::Sender<CollectorRequest>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    let mut sys = System::new_all();
+    info!("[agent] Metric collector started, collecting every minute...");
     loop {
-        sys.refresh_all();
-        // - memory / num_cpus
-        let total_memory = sys.total_memory();
-        let used_memory = sys.used_memory();
-        
-        let uptime = sysinfo::System::uptime();
-
-        let memory_stats = MemoryStats {
-            used_kb: used_memory,
-            total_kb: total_memory,
-            free_kb: total_memory,
-        };
-        
-        let hostname = sysinfo::System::host_name().unwrap_or("unknown".to_string());
-
-        let num_cpus = sys.cpus().len();
-        // sleep for CPU to update
-        tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cpu(),
-        );
-
-        /*
-        System Info:
-        * Hostname [x]
-        * OS [x]
-        * Uptime
-        * Kernel version
-        * CPU model / count
-        * Memory total / used
-
-        Metrics:
-        * CPU usage [x]
-        * Docker usage
-        * Memory usage [x]
-        * Docker memory usage
-        * Disk usage [x]
-        * Disk I/O [x]
-        * Bandwidth usage
-        * Docker bandwidth usage
-        * Temperature (dump sysinfo components) [x]
-        * GPU[n] usage (if available)
-        * GPU[n] temperature (if available)
-         */
-
-        // - cpu / components
-        let cpu = sys.global_cpu_usage() / num_cpus as f32;
-        
-        let components = Components::new_with_refreshed_list();
-        let components_dump = components.iter()
-            .map(|c| {
-                let temp = c.temperature().unwrap_or(0.0);
-                Component {
-                    label: c.label().to_string(),
-                    temperature: temp,
-                }
-            })
-            .collect::<Vec<Component>>();
-        let cpu_stats = CpuStats {
-           usage_percent: cpu as f64,
-        };
-        
-        let cpuName = sys.cpus().get(0)
-            .map(|cpu| cpu.brand().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let sys_disks = sysinfo::Disks::new_with_refreshed_list();
-        let mut sys_disks = sys_disks.into_iter()
-            .filter(|d| (((d.mount_point().to_str().unwrap_or("") == "/"))
-                || (d.mount_point().to_str().unwrap_or("") == "/mnt")))
-            .collect::<Vec<_>>();
-        
-        
-        let disks = sys_disks.into_iter().map(|d| {
-            let total_space = d.total_space();
-            let available_space = d.available_space();
-            let write_bytes = d.usage().total_written_bytes;
-            let read_bytes = d.usage().total_read_bytes;
-            (d.name().display().to_string(), total_space, available_space, write_bytes, read_bytes)
-        }).collect::<Vec<_>>()
-        .into_iter()
-        .map(|(name, total_space, available_space, write_bytes, read_bytes)| {
-            proto::monitor::DiskStats {
-                name: name,
-                used_space: ((total_space - available_space) / 1024 / 1024 / 1024) as i32,
-                total_space: (total_space / 1024 / 1024 / 1024) as i32,
-                read_bytes: read_bytes as i32,
-                write_bytes: write_bytes as i32,
-                unit: "gb".to_string(),
-            }
-        }).collect::<Vec<_>>();
-        
-        // create request
-        let request = tonic::Request::new(proto::monitor::MetricsRequest {
-            hostname,
-            os: os.to_string(),
-            cpu_count: num_cpus as u32,
-            cpu_model: cpuName,
-            kernel_version: "".to_string(),
-            uptime_seconds: uptime,
-            memory_stats: Some(memory_stats),
-            cpu_stats: Some(cpu_stats),
-            disk_stats: disks,
-            components: components_dump
-        });
-
-        // send request
-        match client.report_metrics(request).await {
-            Ok(response) => {
-                println!("Response: {:?}", response.into_inner());
-            },
-            Err(e) => {
-                eprintln!("Error sending metrics: {:?}", e);
-            }
-        }
-        
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        interval.tick().await;
+        let now = Instant::now();
+        let metrics = lib::system_info::collect_metrics(&mut sys).await;
+        let elapsed = now.elapsed();
+        info!("[metrics] Collection complete [{:.2?}]", elapsed);
+        tx.send(CollectorRequest::metrics(metrics)).unwrap();
     }
 }
 
+async fn sysinfo_collector(tx: mpsc::Sender<CollectorRequest>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60 * 10));
+    let mut sys = System::new_all();
+    info!("[agent] Sysinfo collector started, collecting every 10 minutes...");
+    loop {
+        let now = Instant::now();
+        interval.tick().await;
+        let system_info = lib::system_info::collect_system_info(&mut sys).await;
+        let elapsed = now.elapsed();
+        info!("[sysinfo] Collection complete [{:.2?}]", elapsed);
+        tx.send(CollectorRequest::sysinfo(system_info)).unwrap(); // Uncomment if you want to send this data
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // load config
+   // env_logger::init();
+    dotenv().ok();
+
+    let env = Env::default()
+        .filter("MY_LOG_LEVEL")
+        .write_style("MY_LOG_STYLE");
+    env_logger::Builder::from_env(env)
+        .format_timestamp_secs()
+        .init();
+    info!("[agent] Starting Lynx Agent...");
+    
+    let config_str = std::fs::read_to_string("config.toml").map_err(|e| {
+        error!("[agent] No config.toml found, please create one.");
+        e
+    })?;
+    let config: LynxConfig = toml::from_str(&config_str)?;
+    let (tx, rx) = mpsc::channel::<CollectorRequest>();
+
+   info!("Connecting to lynx-hub at {}", config.core.server_url);
+   let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
+        .connect()
+        .await?;
+
+    let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
+
+
+    info!("[agent] Starting sysinfo collector...");
+    tokio::spawn(sysinfo_collector(tx.clone()));
+
+
+    info!("[agent] Starting metric collector...");
+    tokio::spawn(metric_collector(tx.clone()));
+
+    
+    // create a span for tracing
+    // wait for messages on the channel, then send to hub 
+    loop {
+        match rx.recv() {
+            Ok(request) => {
+                match request {
+                    CollectorRequest::sysinfo(system_info) => {
+                        info!("[agent] Sending system info to hub...");
+                        let request = tonic::Request::new(system_info);
+                        match client.get_system_info(request).await {
+                            Ok(response) => {
+                                let resp = response.into_inner();
+                                if resp.status == "200" {
+                                    info!("[agent] Successfully sent system info to hub");
+                                } else {
+                                    info!("[agent] Failed to send system info to hub: {:?}", resp.message)
+                                }
+                            },
+                            Err(e) => {
+                                error!("[agent] Error sending system info: {}", e);
+                            }
+                        }
+                    },
+                    CollectorRequest::metrics(metrics) => {
+                        info!("[agent] Sending metrics to hub...");
+                        let request = tonic::Request::new(metrics);
+                        match client.report_metrics(request).await {
+                            Ok(response) => {
+                                let resp = response.into_inner();
+                                if resp.status == "200" {
+                                    info!("[agent] Successfully sent metrics to hub");
+                                } else {
+                                    info!("[agent] Failed to send metrics to hub: {:?}", resp.message)
+                                }
+                            },
+                            Err(e) => {
+                                error!("[agent] Error sending metrics to hub: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!("[agent] Error receiving metrics: {}", e);
+            }
+        }
+    }
+}
