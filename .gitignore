@@ -11,3 +11,4 @@ lynx-core/config.toml
 lynx-core/.env
 
 .idea
+lynx-agent/.env
