@@ -17,7 +17,11 @@ serde = { version = "1.0.219", features = ["derive"] }
 tower = {version = "0.5.2", features = ["full"]}
 tower-http = { version = "0.6.6", features = ["cors", "full"] }
 axum-htmx = "0.8.1"
-
+env_logger = "0.11.8"
+log = "0.4.27"
+reqwest = { version = "0.12.20", features = ["json"] }
+lettre = {version="0.11.17", features=["smtp-transport", "builder"]}
+thiserror = "2.0.12"
 [build-dependencies]
 prost-build = "0.13.5"
 tonic-build = "0.13.1"
