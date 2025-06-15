@@ -53,10 +53,10 @@
 		<tbody>
 		{#each data.metrics as metric}
 			<tr>
-				<td>{metric.systemId}</td>
+				<td>{metric.system.hostname}</td>
 				<td>{relativeDate(metric.time)}</td>
-				<td>{metric.cpuTemp}</td>
-				<td>{metric.memoryUsedKb ? (metric.memoryUsedKb / 1024 / 1024 / 1024).toFixed(2) : 0}gb</td>
+				<td>{metric.cpuUsage ? (metric.cpuUsage * 100).toFixed(2) : 0}%</td>
+				<td>{metric.memoryUsedKb ? (metric.memoryUsedKb / 1024 / 1024).toFixed(2) : 0}gb</td>
 			</tr>
 		{/each}
 		</tbody>

@@ -1,65 +1,122 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 @plugin "@iconify/tailwind4";
+@import "tw-animate-css";
 
+@custom-variant dark (&:is(.dark *));
 
-* {
-    --background: #161616;
-    --background-alt: #1c1c1c;
-    --foreground: #1c1c1c;
-    --border: #3a3a3a;
-    --text: #f0f0f0;
-    --primary: #a8ed83;
-    --secondary: rgba(108, 145, 88, 0.45);
+:root {
+  --background: #161616;
+  --background-alt: #1c1c1c;
+  --foreground: #1c1c1c;
+  --border: #3a3a3a;
+  --text: #f0f0f0;
+  --primary: #a8ed83;
+  --secondary: rgba(108, 145, 88, 0.45);
+  --cpu: #3e97ff;
+  --memory: #ff3e3e;
+  --disk: #ffb13e;
+  --disk-alt: #ff8e3e;
+  --disk-alt2: #ffb13e;
+  --network: #3effb1;
+  --network-alt: #3e8eff;
+  --radius: 5px;
+  --popover: blue;
 }
+
+.dark {
+  --muted: rgba(125, 125, 125, 0.15);
+  --muted-foreground: rgba(125, 125, 125, 0.7);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.551 0.027 264.364);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --popover: blue
+}
+
+
+
+
 body {
-    margin: 0;
-    padding: 0;
-    font-family: 'Inter' sans-serif;
-    background-color: var(--background);
-    color: var(--text);
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter' sans-serif;
+  background-color: var(--background);
+  color: var(--text);
 }
 
 table {
-    border: 1px solid #393B39;
-    background-color: #232323;
-    width: 100%;
-    text-align: center;
-    border-collapse: collapse;
+  border: 1px solid #393B39;
+  background-color: #232323;
+  width: 100%;
+  text-align: left;
+  border-collapse: collapse;
 }
 table td, table th {
-    border: 1px solid #393B39;
-    padding: 4px 3px;
+  padding: 5px 3px;
+  text-align: left;
 }
 table tbody td {
-    font-size: 15px;
-    color: #ECECEC;
+  font-size: 15px;
+  color: #ECECEC;
 }
 table tr:nth-child(even) {
-    background: #121212;
+  background: #121212;
 }
 table thead {
-    background: #18191B;
-    background: -moz-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
-    background: -webkit-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
-    background: linear-gradient(to bottom, #121212 0%, #18191B 66%, #121212 100%);
-    border-bottom: 2px solid rgba(168, 237, 131, 0.48);
+  background: #18191B;
+  background: -moz-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
+  background: -webkit-linear-gradient(top, #121212 0%, #18191B 66%, #121212 100%);
+  background: linear-gradient(to bottom, #121212 0%, #18191B 66%, #121212 100%);
 }
-table thead th {
-    font-size: 15px;
-    font-weight: bold;
-    color: #FFFFFF;
-    text-align: center;
+table thead tr th {
+  border: 1px solid #393B39;
+  font-size: 15px;
+  font-weight: bold;
+  color: #FFFFFF;
+  text-align: left;
 }
 table tfoot td {
-    font-size: 14px;
+  font-size: 14px;
 }
 table tfoot .links {
-    text-align: right;
+  text-align: right;
 }
 table tfoot .links a{
-    display: inline-block;
-    background: var(--secondary);
-    color: #FFFFFF;
-    padding: 2px 8px;
-    border-radius: 5px;
+  display: inline-block;
+  background: var(--secondary);
+  color: #FFFFFF;
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+
+div[data-slot="select-item"] {
+  transition: background 0.2s ease-in-out;
+}
+div[data-slot="select-item"]:hover {
+  background: var(--foreground);
 }
