@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ProgressBar from '$lib/ProgressBar.svelte';
 	import LineChart from '$lib/components/LineChart.svelte';
+	import RadialChart from '$lib/components/RadialChart.svelte';
 	const {data} = $props();
 	function relativeDate(date: string) : string {
 		const now = new Date();
@@ -22,13 +23,15 @@
 		const secs = seconds % 60;
 		return `${hours}h ${minutes}m ${secs}s`;
 	}
-
-	const chartData = $derived.by(() => {
-		return data.metrics.map(metric => ({
-			time: new Date(metric.time).toLocaleTimeString('it-IT'),
-			cpu: metric.cpuUsage ? metric.cpuUsage : 0
-		}))
-	})
+	const cpuChartData = $derived.by(() => {
+		return [{
+			key: "cpu",
+			color: "#4f46e5",
+			data: [{
+				cpu:data.hub?.cpuUsage ?? 0
+			}]
+		}]
+	});
 
 	function colorFromPercent(percentage: number) : string {
 		let r = Math.round(144 + (255 - 144) * (percentage / 100));
@@ -98,13 +101,6 @@
 						class={`max-w-sm w-full bg-[var(--background)] z-[5] relative border  flex flex-col items-start  py-1 pl-2.5 rounded-lg shadow-md`}
 						style={`border: 1px solid ${colorFromPercent(data.hub.disks[0].used / data.hub.disks[0].space * 100)}`}
 					>
-						<div class="absolute left-0 bottom-0 rounded-lg w-full z-[-1] bg-blue-500/40 border-t border-blue-500"
-								 style={`
-								 border: 1px solid ${colorFromPercent(data.hub.disks[0].used / data.hub.disks[0].space * 100)};
-								 background: ${colorFromPercentAlpha(data.hub.disks[0].used / data.hub.disks[0].space * 100)};
-								 height: ${data.hub.disks[0].used / data.hub.disks[0].space * 100}%`
-								 }
-						></div>
 						<p class="text-lg font-bold flex items-center align-middle gap-1">
 							<span class="icon-[ri--ram-line] w-5 h-5"></span>
 							Storage
