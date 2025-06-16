@@ -37,7 +37,7 @@ pub async fn process_notification(
                     component: "cpu".to_string(),
                     metric: "usage".to_string(),
                     operator: ">".to_string(),
-                    value: "10".to_string(),
+                    value: "60".to_string(),
                     next_compare: Some("and".to_string())
                 },
                 Condition {

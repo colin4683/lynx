@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use env_logger::Env;
-use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use tokio::time::Instant;
 use tonic::Status;
 use tonic::metadata::MetadataValue;
@@ -74,6 +74,7 @@ enum CollectorRequest {
 async fn metric_collector(tx: mpsc::Sender<CollectorRequest>) {
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     let mut sys = System::new_all();
+    tokio::time::sleep(MINIMUM_CPU_UPDATE_INTERVAL).await;
     info!("[agent] Metric collector started, collecting every minute...");
     loop {
         interval.tick().await;
