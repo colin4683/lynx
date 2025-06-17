@@ -1,7 +1,18 @@
 import type {Actions, PageServerLoadEvent, RequestEvent} from "./$types";
 import { redirect } from '@sveltejs/kit';
+import { db } from '$lib/server/db';
 
-export function load(event: PageServerLoadEvent) {
+export async function load(event: PageServerLoadEvent) {
+
+
+	let users = await db.query.users.findFirst({
+		where: (users, {eq}) => eq(users.admin, true)
+	});
+
+	if (!users) {
+		return redirect(302, "/register");
+	}
+
 	if (event.locals.session == null || event.locals.user == null) {
 		return redirect(302, "/login");
 	}

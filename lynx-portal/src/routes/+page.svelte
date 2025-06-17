@@ -2,7 +2,12 @@
 	import ProgressBar from '$lib/ProgressBar.svelte';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import RadialChart from '$lib/components/RadialChart.svelte';
+	import MiniLineChart from '$lib/components/MiniLineChart.svelte';
+	import {onDestroy} from 'svelte';
+
 	const {data} = $props();
+
+
 	function relativeDate(date: string) : string {
 		const now = new Date();
 		const diff = now.getTime() - new Date(date).getTime();
@@ -23,15 +28,6 @@
 		const secs = seconds % 60;
 		return `${hours}h ${minutes}m ${secs}s`;
 	}
-	const cpuChartData = $derived.by(() => {
-		return [{
-			key: "cpu",
-			color: "#4f46e5",
-			data: [{
-				cpu:data.hub?.cpuUsage ?? 0
-			}]
-		}]
-	});
 
 	function colorFromPercent(percentage: number) : string {
 		let r = Math.round(144 + (255 - 144) * (percentage / 100));
@@ -45,11 +41,32 @@
 		let b = Math.round(144 + (71 - 144) * (percentage / 100));
 		return `rgba(${r},${g},${b}, 0.4)`;
 	}
+	const cpuChartData = $derived.by(() => {
+		return data.metrics.map(metric => ({
+			time: new Date(metric.time).toLocaleTimeString('it-IT'),
+			cpu: metric.cpuUsage ?? 0
+		}))
+	});
+	const cpuChartConfig = $state({
+		cpu: {
+			label: "cpu",
+			color: "#5c61d0"
+		}
+	})
+
+
+
 </script>
 
 
 <div class="w-full px-2 flex flex-col gap-10">
-	<h1 class="text-lg font-extrabold">Welcome to the lynx dashboard</h1>
+	<div class="w-full flex flex-col justify-start items-start gap-2">
+		<h1 class="text-lg font-extrabold">Welcome to the lynx dashboard</h1>
+		<p class="text-center align-middle flex items-center gap-1.5">
+			<span class="text-muted-foreground icon-[line-md--account] w-4 h-4"></span>
+			<span class="text-sm text-muted-foreground">{data.user.email}</span>
+		</p>
+	</div>
 
 
 	<div class="w-full bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
@@ -73,8 +90,7 @@
 			</div>
 			<div class="w-full flex justify-between gap-2  align-middle items-center">
 				<div
-					class={`max-w-sm w-full bg-[var(--background)] relative border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
-					style={`border: 1px solid ${colorFromPercent(data.hub.cpuUsage ?? 0.0)}`}
+					class={`max-w-sm w-full bg-[var(--background)] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
 				>
 					<p class="text-lg font-bold flex items-center align-middle gap-1">
 						<span class="icon-[solar--cpu-bolt-linear] w-5 h-5"></span>
@@ -82,11 +98,18 @@
 					</p>
 					<p class="text-xs text-muted-foreground">{data.hub.cpu}</p>
 					<p class="absolute right-3 bottom-1/4">{(data.hub.cpuUsage ?? 0.0).toFixed(2)}%</p>
+					<div class="w-full flex justify-center py-2">
+						<MiniLineChart
+							config={cpuChartConfig}
+							data={cpuChartData}
+							x="time"
+							y="cpu"
+						/>
+					</div>
 				</div>
 				{#if data.hub.memoryTotal && data.hub.memoryUsed}
 					<div
-						class={`max-w-sm w-full bg-[var(--background)] relative border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
-						style={`border: 1px solid ${colorFromPercent(data.hub.memoryUsed / data.hub.memoryTotal * 100)}`}
+						class={`max-w-sm w-full bg-[var(--background)] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
 					>
 						<p class="text-lg font-bold flex items-center align-middle gap-1">
 							<span class="icon-[ri--ram-line] w-5 h-5"></span>
@@ -98,8 +121,7 @@
 				{/if}
 				{#if data.hub.disks[0].used && data.hub.disks[0].space}
 					<div
-						class={`max-w-sm w-full bg-[var(--background)] z-[5] relative border  flex flex-col items-start  py-1 pl-2.5 rounded-lg shadow-md`}
-						style={`border: 1px solid ${colorFromPercent(data.hub.disks[0].used / data.hub.disks[0].space * 100)}`}
+						class={`max-w-sm w-full bg-[var(--background)] z-[5] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
 					>
 						<p class="text-lg font-bold flex items-center align-middle gap-1">
 							<span class="icon-[ri--ram-line] w-5 h-5"></span>

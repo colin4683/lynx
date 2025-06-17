@@ -1,6 +1,30 @@
 import {db} from '../lib/server/db';
+import { redirect } from '@sveltejs/kit';
+import type { LayoutServerLoadEvent } from './$types';
 
-export const load = async () => {
+export async function load(event: LayoutServerLoadEvent) {
+
+	let users = await db.query.users.findFirst({
+		where: (users, {eq}) => eq(users.admin, true)
+	});
+
+	if (!users) {
+		return redirect(302, "/register");
+	}
+
+	if (event.locals.session == null || event.locals.user == null) {
+		return redirect(302, "/login");
+	}
+	if (!event.locals.user.emailVerified) {
+		return redirect(302, "/verify-email");
+	}
+	if (!event.locals.user.registered2FA) {
+		return redirect(302, "/2fa/setup");
+	}
+	if (!event.locals.session.twoFactorVerified) {
+		return redirect(302, "/2fa");
+	}
+
 	let data = await db.query.systems.findMany({
 		with: {
 			disks: {
@@ -34,11 +58,10 @@ export const load = async () => {
 		//data = data.filter(system => system.id !== hub.id);
 	}
 
-	console.log("REFRESHED LAYOUT PAGE");
-
 	return {
 		systems: data,
 		metrics: metrics,
-		hub: hub || null
+		hub: hub || null,
+		user: event.locals.user
 	};
 };
