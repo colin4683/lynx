@@ -27,11 +27,8 @@ async function action(event: RequestEvent) {
 	const clientIp = event.request.headers.get("X-Forwarded-For");
 
 	const formData = await event.request.formData();
-	console.log(formData);
 	const email = formData.get("email");
 	const password = formData.get("password");
-	console.log(`${email}-${typeof email}`);
-	console.log(`${password}-${typeof password}`);
 	if (typeof email !== "string" || typeof password !== "string") {
 		return fail(400, {
 			message: "Invalid form data",
@@ -53,7 +50,6 @@ async function action(event: RequestEvent) {
 	}
 
 	let test = await hashPassword(password);
-	console.log(`${password} -> ${test}`);
 
 	let authorized = await login(email, password);
 	if (!authorized.success || authorized.error || !authorized.userId) {

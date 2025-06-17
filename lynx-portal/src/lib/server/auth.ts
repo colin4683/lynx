@@ -25,11 +25,17 @@ export function generateRandomCode(): string {
 	return encodeBase32UpperCaseNoPadding(recoveryCodeBytes);
 }
 
+export function generateEmailCode(): string {
+	const recoveryCodeBytes = new Uint8Array(6);
+	crypto.getRandomValues(recoveryCodeBytes);
+	return encodeBase32UpperCaseNoPadding(recoveryCodeBytes);
+}
+
 export async function register(
 	email: string,
 	password: string
-): Promise<{ success: boolean; error?: string }> {
-	let ret = { success: false, error: 'Unknown error occurred' };
+): Promise<{ success: boolean; userId?: number | null, error?: string | null }> {
+	let ret = { success: false} as { success: boolean; userId?: number | null, error?: string | null };
 
 	const existingUser = await db.query.users.findFirst({
 		where: (users, { eq }) => eq(users.email, email)
@@ -37,24 +43,31 @@ export async function register(
 
 	if (existingUser) {
 		ret.error = 'User with that email already exists.';
+		return ret;
 	}
 
 	const passwordHash = await hashPassword(password);
-	const code = generateRandomCode();
+	const code = generateEmailCode();
 
-	await db
+	let newUser = await db
 		.insert(users)
 		.values({
 			email: email,
 			password: passwordHash,
 			recoveryCode: code
 		})
-		.catch((err) => {
-			ret.error = 'Failed to create user';
-		})
-		.then((res) => {
-			ret.success = true;
-		});
+		.returning({insertedId: users.id});
+
+	if (!newUser.at(0)) {
+		ret.error = 'Failed to create new user';
+		return ret;
+	}
+	ret.success = true;
+	ret.userId = newUser.at(0)!.insertedId;
+
+	// todo: send email for code
+	console.log(`EMAIL CODE: ${code}`);
+
 	return ret;
 }
 
