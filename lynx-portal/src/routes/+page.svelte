@@ -97,14 +97,14 @@
 						CPU
 					</p>
 					<p class="text-xs text-muted-foreground">{data.hub.cpu}</p>
-					<p class="absolute right-3 bottom-1/4">{(data.hub.cpuUsage ?? 0.0).toFixed(2)}%</p>
-					<div class="w-full flex justify-center py-2">
+					<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
 						<MiniLineChart
 							config={cpuChartConfig}
 							data={cpuChartData}
 							x="time"
 							y="cpu"
 						/>
+						<p class="">{(data.hub.cpuUsage ?? 0.0).toFixed(2)}%</p>
 					</div>
 				</div>
 				{#if data.hub.memoryTotal && data.hub.memoryUsed}
@@ -116,7 +116,12 @@
 							Memory
 						</p>
 						<p class="text-xs text-muted-foreground">Total: {(data.hub.memoryTotal / 1024 / 1024).toFixed(0)}gb</p>
-						<p class="absolute right-3 bottom-1/4">{(data.hub.memoryUsed / data.hub.memoryTotal * 100).toFixed(2)}%</p>
+						<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
+							<div class="w-full max-w-[150px] border border-[#e21f88]  bg-[var(--foreground)] h-5">
+								<div class={`bg-[#e21f88]/70 border-r border-r-[#e21f88] h-4.5`} style="width: {(data.hub.memoryUsed / data.hub.memoryTotal * 100).toFixed(2)}%"></div>
+							</div>
+							<p class="">{(data.hub.memoryUsed / data.hub.memoryTotal * 100).toFixed(2)}%</p>
+						</div>
 					</div>
 				{/if}
 				{#if data.hub.disks[0].used && data.hub.disks[0].space}
@@ -124,11 +129,16 @@
 						class={`max-w-sm w-full bg-[var(--background)] z-[5] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
 					>
 						<p class="text-lg font-bold flex items-center align-middle gap-1">
-							<span class="icon-[ri--ram-line] w-5 h-5"></span>
+							<span class="icon-[tdesign--hard-disk-storage-filled]  w-5 h-5"></span>
 							Storage
 						</p>
-						<p class="text-xs text-muted-foreground">Capacity: {(data.hub.disks[0].space / 1024 / 1024).toFixed(0)}gb</p>
-						<p class="absolute right-3 bottom-1/4">{(data.hub.disks[0].used / data.hub.disks[0].space * 100).toFixed(2)}%</p>
+						<p class="text-xs text-muted-foreground">Capacity: {(data.hub.disks[0].space).toFixed(0)}{data.hub.disks[0].unit}</p>
+						<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
+							<div class="w-full max-w-[150px] border border-[#5e40ec]  bg-[var(--foreground)] h-5">
+								<div class={`bg-[#5e40ec]/70 border-r border-r-[#5e40ec] h-4.5`} style="width: {(data.hub.disks[0].used / data.hub.disks[0].space * 100).toFixed(2)}%"></div>
+							</div>
+							<p class="">{(data.hub.disks[0].used / data.hub.disks[0].space * 100).toFixed(2)}%</p>
+						</div>
 					</div>
 				{/if}
 			</div>

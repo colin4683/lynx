@@ -4,7 +4,7 @@
 	import CPUChart from '$lib/components/CPUChart.svelte';
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import * as Select from '$lib/components/ui/select/index';
+	import * as Select from '$lib/components/ui/select';
 
 	const { data } = $props();
 	function relativeDate(date: string) : string {
@@ -27,7 +27,7 @@
 		return `${hours}h ${minutes}m ${secs}s`;
 	}
 
-	let range = $state($page.url.searchParams.get("range") || "30 minutes");
+	let range = $state($page.url.searchParams.get("range") ?? "30 minutes");
 
 	let interval = $derived.by(() => {
 		switch (range) {
@@ -175,7 +175,7 @@
 			<span class={`w-3.5 h-3.5 inline-block rounded-full border animate-pulse ${data.system.active ? 'bg-green-300/60 border-green-400' : 'bg-red-400/60 border-red-400'}`}></span>
 		</p>
 		<div>
-			<Select.Root type="single" bind:value={range} onValueChange={(val) => {
+			<Select.Root type="single" bind:value={range}  onValueChange={(val) => {
 			$page.url.searchParams.set("range", range);
 			$page.url.searchParams.set("interval", interval);
 			goto($page.url.pathname + "?" + $page.url.searchParams.toString(), {
