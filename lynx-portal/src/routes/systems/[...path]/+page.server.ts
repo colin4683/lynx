@@ -58,12 +58,30 @@ export const load = async ({ params, url, depends }) => {
 	console.log(`Fetching metrics for system ${system.label} (${system.id}) from ${startTime.toISOString()} to ${now.toISOString()} with interval of ${intervalMinutes} minutes`);
 
 	const metrics = await db.execute(sql`
+		WITH time_slots AS (
+			SELECT
+				to_timestamp(
+					floor(
+						extract(epoch from time) / ${intervalSeconds}
+					) * ${intervalSeconds}
+				) as time_slot,
+				*
+			FROM metrics
+			WHERE
+				system_id = ${path_number}
+				AND time >= ${startTime.toISOString()}
+			),
+			component_stats AS (
+		SELECT DISTINCT ON (time_slot, component->>'label')
+			time_slot,
+			component->>'label' as component_name,
+			AVG((component->>'temperature')::numeric) as avg_temp
+		FROM time_slots,
+			jsonb_array_elements(components::jsonb) as component
+		GROUP BY time_slot, component_name
+			)
 SELECT
-	to_timestamp(
-		floor(
-			extract(epoch from time) / ${intervalSeconds}
-		) * ${intervalSeconds}
-	) as time_slot,
+	t.time_slot,
 	AVG(cpu_usage) as cpu_total,
 	AVG(memory_used_kb) as used_total,
 	AVG(net_in) as in_total,
@@ -71,13 +89,18 @@ SELECT
 	AVG(load_one) as one_total,
 	AVG(load_five) as five_total,
 	AVG(load_fifteen) as fifteen_total,
-	AVG(memory_total_kb) as memory_total_kb
-FROM metrics
-WHERE
-	system_id = ${path_number}
-	AND time >= ${startTime.toISOString()}
-GROUP BY time_slot
-ORDER BY time_slot ASC
+	AVG(memory_total_kb) as memory_total_kb,
+	(
+		SELECT jsonb_agg(jsonb_build_object(
+			'label', cs.component_name,
+			'avg_temperature', cs.avg_temp
+										 ))
+		FROM component_stats cs
+		WHERE cs.time_slot = t.time_slot
+	) as component_temperatures
+FROM time_slots t
+GROUP BY t.time_slot
+ORDER BY t.time_slot ASC
 `);
 
 	const disks = await db.execute(sql`

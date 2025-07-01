@@ -165,6 +165,57 @@
 		}
 	})
 
+	const temperatureData = $derived.by(() => {
+		return data.metrics.map((metric: any) => {
+			let component_temp_array = metric.component_temperatures;
+			// combine all components into a single object for each time slot
+			return {
+				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
+				...Object.fromEntries(
+					Object.entries(component_temp_array).map(([key, value]) => [(value as any).label, (value as any).avg_temperature])
+				)
+			}
+		})
+	})
+
+	const temperatureConfig = $state({
+		Composite: {
+			label: "Composite",
+			color: "#ffcc00"
+		},
+		'iwlwifi_1 temp1': {
+			label: "iwlwifi_1 temp1",
+			color: "#ff6600"
+		},
+		Tccd1: {
+			label: "Tccd1",
+			color: "#ff3300"
+		},
+		Tctl: {
+			label: "Tctl",
+			color: "#ff0000"
+		},
+	});
+
+/*	const temperatureConfig = $derived.by(() => {
+		let config: any = {};
+		if (temperatureData.length > 0) {
+			let lastMetric = temperatureData[temperatureData.length - 1];
+			Object.keys(lastMetric[0]).forEach((key: string) => {
+				if (key !== 'time') {
+					config[key] = {
+						label: key,
+						color: `hsl(${Math.random() * 360}, 70%, 50%)`
+					}
+				}
+			});
+		}
+		return config;
+	});*/
+
+
+	console.log("Temperature Data:", temperatureData);
+
 
 </script>
 
@@ -287,14 +338,15 @@
 	</div>
 
 	<div class={`row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]`}>
-		<h1 class="text-lg font-extrabold">Storage</h1>
-		<p class="text-xs text-muted-foreground -mt-3 ">Storage capacity over the last {range}.</p>
+		<h1 class="text-lg font-extrabold">Component Temperatures</h1>
+		<p class="text-xs text-muted-foreground -mt-3 ">Component temperatures over the last {range}.</p>
 		<LineChart
-			config={storageChartConfig}
-			data={storageChartData}
+			config={temperatureConfig}
+			data={temperatureData}
 			x="time"
-			y="space"
-			format={(d) => `${d.toFixed(2)}gb`}
+			y=""
+			stack="overlap"
+			format={(d) => `${d.toFixed(2)}°C`}
 		/>
 	</div>
 </div>
