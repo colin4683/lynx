@@ -27,6 +27,44 @@ export const sessions = pgTable("sessions", {
 	}),
 ]);
 
+
+
+export const alertRules = pgTable("alert_rules", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "alert_rules_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	name: text().notNull(),
+	description: text(),
+	userId: integer("user_id").notNull(),
+	expression: text().notNull(),
+	severity: text().notNull(),
+	active: boolean().default(false),
+	created: timestamp({ mode: 'string' }).defaultNow(),
+	updated: timestamp({ mode: 'string' }).defaultNow(),
+}, (table) => [
+	foreignKey({
+		columns: [table.userId],
+		foreignColumns: [users.id],
+		name: "alert_rules_users_id_fk"
+	}),
+]);
+
+
+export const alertSystems = pgTable("alert_systems", {
+	ruleId: integer("rule_id").notNull(),
+	systemId: integer("system_id").notNull(),
+}, (table) => [
+	index().using("btree", table.systemId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+		columns: [table.ruleId],
+		foreignColumns: [alertRules.id],
+		name: "alert_systems_alert_rules_id_fk"
+	}),
+	foreignKey({
+		columns: [table.systemId],
+		foreignColumns: [systems.id],
+		name: "alert_systems_systems_id_fk"
+	}),
+]);
+
 export const systems = pgTable("systems", {
 	id: serial().primaryKey().notNull(),
 	hostname: text(),
@@ -131,6 +169,26 @@ export const disksRelations = relations(disks, ({one}) => ({
 export const metricsRelations = relations(metrics, ({one}) => ({
 	system: one(systems, {
 		fields: [metrics.systemId],
+		references: [systems.id]
+	}),
+}));
+
+
+export const alertRulesRelations = relations(alertRules, ({one, many}) => ({
+	user: one(users, {
+		fields: [alertRules.userId],
+		references: [users.id]
+	}),
+	alertSystems: many(alertSystems),
+}));
+
+export const alertSystemsRelations = relations(alertSystems, ({one}) => ({
+	alertRule: one(alertRules, {
+		fields: [alertSystems.ruleId],
+		references: [alertRules.id]
+	}),
+	system: one(systems, {
+		fields: [alertSystems.systemId],
 		references: [systems.id]
 	}),
 }));

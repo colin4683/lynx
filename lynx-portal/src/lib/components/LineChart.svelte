@@ -33,9 +33,9 @@
 		x={x}
 		yNice
 		padding={{
-			top: 10,
+			top: 30,
 			right: 10,
-			bottom: 50,
+			bottom: 30,
 			left: 50
 		}}
 		legend
@@ -47,14 +47,14 @@
 				motion: "tween",
  			},
 			xAxis: {
-				format: (d) => d.slice(0, 5),
+				format: (d) => d ? d.slice(0, 5) : "",
 			},
 			yAxis: { format: format ?? ((d) => d.toString()) },
 		}}
 		seriesLayout={stack ?? "stack"}
 		series={series}>
 		{#snippet tooltip()}
-			<Chart.Tooltip
+			<Chart.Tooltip indicator="dot"
 			/>
 		{/snippet}
 

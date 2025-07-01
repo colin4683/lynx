@@ -133,7 +133,7 @@
 						{/if}
 						<div
 							class={cn(
-								"flex flex-1 shrink-0 justify-between leading-none",
+								"flex flex-1 gap-2 shrink-0 justify-between leading-none",
 								nestLabel ? "items-end" : "items-center"
 							)}
 						>
@@ -141,12 +141,12 @@
 								{#if nestLabel}
 									{@render TooltipLabel()}
 								{/if}
-								<span class="text-muted-foreground">
+								<span class="text-white/60">
 									{itemConfig?.label || item.name}
 								</span>
 							</div>
 							{#if item.value}
-								<span class="text-foreground font-mono font-medium tabular-nums">
+								<span class="text-muted-foreground font-mono font-medium tabular-nums">
 									{item.value.toLocaleString()}
 								</span>
 							{/if}

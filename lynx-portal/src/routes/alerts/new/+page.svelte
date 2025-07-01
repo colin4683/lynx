@@ -5,6 +5,10 @@
 	import { Input } from '$lib/components/ui/input/index';
 	import * as Select from '$lib/components/ui/select/index';
 	import { Label } from '$lib/components/ui/label';
+	import {enhance} from '$app/forms';
+	import { goto } from '$app/navigation';
+
+
 
 	type Expression = {
 		id: number;
@@ -33,6 +37,38 @@
 	let fieldValue = $state('');
 	let operatorValue = $state('');
 	let valueValue = $state('');
+	let editor =  $state('builder');
+	let ruleName = $state('');
+	let ruleDescription = $state('');
+
+	let rawExpression = $derived.by(() => {
+		return rules.map(rule => `${rule.field} ${rule.operator} ${rule.value}`).join(` ${rules[0].next_operator || 'AND'} `);
+	});
+
+	function sendForm() {
+		// submit post form
+		fetch('/alerts/new', {
+			method: 'POST',
+			body: JSON.stringify({
+				name: ruleName,
+				description: ruleDescription,
+				severity: 'low',
+				expression: rawExpression
+			}),
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		}).then(response => {
+			console.log(response);
+			if (response.ok) {
+			} else {
+				alert('Failed to create rule.');
+			}
+		}).catch(error => {
+			console.error('Error creating rule:', error);
+			alert('An error occurred while creating the rule.');
+		})
+	}
 
 </script>
 
@@ -46,20 +82,98 @@
 	</div>
 
 	<div class="flex items-center gap-2 mt-4">
-		<Input type="text" placeholder="Rule Name" class="input input-bordered w-64" />
-		<Input type="text" placeholder="Description" class="input input-bordered w-64" />
+		<Input type="text" placeholder="Rule Name" class="input input-bordered w-64" bind:value={ruleName} />
+		<Input type="text" placeholder="Description" class="input input-bordered w-64" bind:value={ruleDescription} />
 	</div>
 
 	<div class="mt-4 flex flex-col">
-		<p class="text-sm text-muted-foreground mb-5">Add conditions to your rule:</p>
-		{#each rules as rule}
-			<div class="flex items-center justify-between  rounded-lg mb-2" id="rule-{rule.id.toString()}">
-				<div class="flex items-center gap-2">
-					<Input disabled type="text" bind:value={rule.field} placeholder="Field" class="input input-bordered w-32" />
-					<Select.Root disabled type="single" bind:value={rule.operator}>
-						<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
+		<p class="text-sm text-muted-foreground mb-5">
+			Add conditions to your rule:
+			<span class={`cursor-pointer ${editor == "builder" ? 'text-primary' : 'text-muted-foreground'} transition-colors`} onclick={() => editor = "builder"}>Expression builder</span>
+			{editor == "builder" ? ' / ' : ' \\ '}
+			<span class={`cursor-pointer ${editor == "raw" ? 'text-primary' : 'text-muted-foreground'} transition-colors`} onclick={() => editor = "raw"}>Raw expression</span>
+		</p>
+
+		{#if editor === 'raw'}
+			<textarea
+				class="textarea textarea-bordered bg-[var(--foreground)] border border-border outline-none w-full h-32"
+				bind:value={rawExpression}
+				onblur={() => {
+					rules = rawExpression.split(/ AND | OR /).map((expr, index) => {
+						const parts = expr.split(' ');
+						return {
+							id: index + 1,
+							field: parts[0],
+							operator: parts[1],
+							value: parts.slice(2).join(' '),
+							next_operator: index < rules.length - 1 ? (expr.includes('OR') ? 'OR' : 'AND') : undefined
+						};
+					});
+				}}
+			>
+			</textarea>
+		{/if}
+		{#if editor === 'builder'}
+			{#each rules as rule}
+				<div class="flex items-center justify-between  rounded-lg mb-2" id="rule-{rule.id.toString()}">
+					<div class="flex items-center gap-2">
+						<Input disabled type="text" bind:value={rule.field} placeholder="Field" class="input input-bordered w-32" />
+						<Select.Root disabled type="single" bind:value={rule.operator}>
+							<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
 						<span class="flex items-center gap-2">
 							<span class="text-sm">{rule.operator}</span>
+						</span>
+							</Select.Trigger>
+							<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
+								<Select.Item value="=">=</Select.Item>
+								<Select.Item value="!=">!=</Select.Item>
+								<Select.Item value=">">{">"}</Select.Item>
+								<Select.Item value="<">{"<"}</Select.Item>
+							</Select.Content>
+						</Select.Root>
+						<Input disabled type="text" bind:value={rule.value} placeholder="Value" class="input input-bordered w-32" />
+						<Button variant="ghost" class="cursor-pointer" size="icon" onclick={() => {
+					rules = rules.filter(r => r.id !== rule.id);
+				}}>
+							<span class="icon-[line-md--trash] w-5 h-5"></span>
+						</Button>
+					</div>
+				</div>
+				<div class={`flex items-center justify-between ${rule.next_operator === 'AND' ? 'mb-2' : 'mt-5 mb-5'}`}>
+				<span class="text-sm text-muted-foreground">
+					{rule.next_operator}
+				</span>
+				</div>
+			{/each}
+			<div class="flex items-center justify-between mb-2 gap-1">
+				<div class="flex items-center gap-2">
+					<Select.Root type="single" bind:value={fieldValue} onValueChange={(val) => {
+					fieldValue = val;
+				}}>
+						<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
+						<span class="flex items-center gap-2">
+							<span class="icon-[line-md--filter] w-4 h-4"></span>
+							<span class="text-sm">{fieldValue || 'Select Field'}</span>
+						</span>
+						</Select.Trigger>
+						<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
+							<Select.Item value="metric">Metric Name</Select.Item>
+							<Select.Item value="cpu">CPU Usage (%)</Select.Item>
+							<Select.Item value="memory">Memory Usage (%)</Select.Item>
+							<Select.Item value="l1">Load 1</Select.Item>
+							<Select.Item value="l5">Load 5</Select.Item>
+							<Select.Item value="l15">Load 15</Select.Item>
+							<Select.Item value="disk">Disk Usage (%)</Select.Item>
+							<Select.Item value="in">  In (mb/s)</Select.Item>
+							<Select.Item value="out">Network Out (mb/s)</Select.Item>
+							<Select.Item value="temp">Temperature (°C)</Select.Item>
+						</Select.Content>
+					</Select.Root>
+
+					<Select.Root type="single" bind:value={operatorValue}>
+						<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
+						<span class="flex items-center gap-2">
+							<span class="text-sm">{operatorValue || 'Select Operator'}</span>
 						</span>
 						</Select.Trigger>
 						<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
@@ -69,61 +183,9 @@
 							<Select.Item value="<">{"<"}</Select.Item>
 						</Select.Content>
 					</Select.Root>
-					<Input disabled type="text" bind:value={rule.value} placeholder="Value" class="input input-bordered w-32" />
-					<Button variant="ghost" class="cursor-pointer" size="icon" onclick={() => {
-					rules = rules.filter(r => r.id !== rule.id);
-				}}>
-						<span class="icon-[line-md--trash] w-5 h-5"></span>
-					</Button>
+					<Input type="text" placeholder="Value" bind:value={valueValue} class="input input-bordered w-32" />
 				</div>
-			</div>
-			<div class={`flex items-center justify-between ${rule.next_operator === 'AND' ? 'mb-2' : 'mt-5 mb-5'}`}>
-				<span class="text-sm text-muted-foreground">
-					{rule.next_operator}
-				</span>
-			</div>
-		{/each}
-		<div class="flex items-center justify-between mb-2 gap-1">
-			<div class="flex items-center gap-2">
-				<Select.Root type="single" bind:value={fieldValue} onValueChange={(val) => {
-					fieldValue = val;
-				}}>
-					<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
-						<span class="flex items-center gap-2">
-							<span class="icon-[line-md--filter] w-4 h-4"></span>
-							<span class="text-sm">{fieldValue || 'Select Field'}</span>
-						</span>
-					</Select.Trigger>
-					<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
-						<Select.Item value="metric">Metric Name</Select.Item>
-						<Select.Item value="cpu">CPU Usage (%)</Select.Item>
-						<Select.Item value="memory">Memory Usage (%)</Select.Item>
-						<Select.Item value="l1">Load 1</Select.Item>
-						<Select.Item value="l5">Load 5</Select.Item>
-						<Select.Item value="l15">Load 15</Select.Item>
-						<Select.Item value="disk">Disk Usage (%)</Select.Item>
-						<Select.Item value="in">  In (mb/s)</Select.Item>
-						<Select.Item value="out">Network Out (mb/s)</Select.Item>
-						<Select.Item value="temp">Temperature (°C)</Select.Item>
-					</Select.Content>
-				</Select.Root>
-
-				<Select.Root type="single" bind:value={operatorValue}>
-					<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
-						<span class="flex items-center gap-2">
-							<span class="text-sm">{operatorValue || 'Select Operator'}</span>
-						</span>
-					</Select.Trigger>
-					<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
-						<Select.Item value="=">=</Select.Item>
-						<Select.Item value="!=">!=</Select.Item>
-						<Select.Item value=">">{">"}</Select.Item>
-						<Select.Item value="<">{"<"}</Select.Item>
-					</Select.Content>
-				</Select.Root>
-				<Input type="text" placeholder="Value" bind:value={valueValue} class="input input-bordered w-32" />
-			</div>
-			<Button variant="ghost" size="icon" onclick={() => {
+				<Button variant="ghost" size="icon" onclick={() => {
 				const newRule: Expression = {
 					id: rules.length + 1,
 					field: fieldValue || '',
@@ -136,9 +198,9 @@
 				operatorValue = '';
 				valueValue = '';
 			}}>
-				AND
-			</Button>
-			<Button variant="ghost" size="icon" onclick={() => {
+					AND
+				</Button>
+				<Button variant="ghost" size="icon" onclick={() => {
 				const newRule: Expression = {
 					id: rules.length + 1,
 					field: fieldValue || '',
@@ -151,9 +213,10 @@
 				operatorValue = '';
 				valueValue = '';
 			}}>
-				OR
-			</Button>
-		</div>
+					OR
+				</Button>
+			</div>
+		{/if}
 	</div>
 
 	<div class="mt-4 flex flex-col">
@@ -168,7 +231,7 @@
 				<Switch id="email-notifier" class="cursor-pointer" checked={true} />
 			</div>
 			<div class="flex items-center  justify-between w-full gap-2">
-				<Label for="webhook-notifier">Webhook</Label>
+				<Label for="webhook-notifier">Discord</Label>
 				<Switch id="webhook-notifier" class="cursor-pointer" checked={false} />
 			</div>
 		</div>
@@ -176,7 +239,14 @@
 
 	<div class="mt-4">
 		<Button class="bg-primary/50 border border-primary cursor-pointer active:scale-95" onclick={() => {
-			alert('Rule created!'); // Replace with actual rule creation logic
+			sendForm();
+			// Reset form after submission
+			rules = [];
+			fieldValue = '';
+			operatorValue = '';
+			valueValue = '';
+			rawExpression = '';
+			editor = 'builder';
 		}}>
 			Create Rule
 		</Button>

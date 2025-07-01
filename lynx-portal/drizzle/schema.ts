@@ -1,17 +1,7 @@
-import { pgTable, integer, text, boolean, foreignKey, unique, serial, timestamp, doublePrecision, bigint, index } from "drizzle-orm/pg-core"
+import { pgTable, foreignKey, text, integer, boolean, timestamp, index, unique, serial, doublePrecision, bigint } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
-
-export const users = pgTable("users", {
-	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "users_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
-	email: text().notNull(),
-	password: text().notNull(),
-	admin: boolean().default(false),
-	emailVerified: boolean("email_verified").default(false),
-	totpKey: text("totp_key"),
-	recoveryCode: text("recovery_code"),
-});
 
 export const sessions = pgTable("sessions", {
 	id: text().primaryKey().notNull(),
@@ -23,6 +13,52 @@ export const sessions = pgTable("sessions", {
 			columns: [table.userId],
 			foreignColumns: [users.id],
 			name: "sessions_users_id_fk"
+		}),
+]);
+
+export const users = pgTable("users", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "users_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	email: text().notNull(),
+	password: text().notNull(),
+	admin: boolean().default(false),
+	emailVerified: boolean("email_verified").default(false),
+	// TODO: failed to parse database type 'bytea'
+	totpKey: unknown("totp_key"),
+	recoveryCode: text("recovery_code"),
+});
+
+export const alertRules = pgTable("alert_rules", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "alert_rules_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	name: text().notNull(),
+	description: text(),
+	userId: integer("user_id").notNull(),
+	expression: text().notNull(),
+	severity: text().notNull(),
+	active: boolean().default(false),
+	created: timestamp({ mode: 'string' }).defaultNow(),
+	updated: timestamp({ mode: 'string' }).defaultNow(),
+}, (table) => [
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "alert_rules_users_id_fk"
+		}),
+]);
+
+export const alertSystems = pgTable("alert_systems", {
+	ruleId: integer("rule_id").notNull(),
+	systemId: integer("system_id").notNull(),
+}, (table) => [
+	index().using("btree", table.systemId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+			columns: [table.ruleId],
+			foreignColumns: [alertRules.id],
+			name: "alert_systems_alert_rules_id_fk"
+		}),
+	foreignKey({
+			columns: [table.systemId],
+			foreignColumns: [systems.id],
+			name: "alert_systems_systems_id_fk"
 		}),
 ]);
 

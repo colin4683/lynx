@@ -4,25 +4,10 @@
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from '$lib/components/ui/button';
 
+	const { data } = $props();
 
 	const rules = $derived.by(() => {
-		return [
-			{
-				id: 1,
-				name: "High CPU Usage",
-				description: "Triggered when CPU usage exceeds 80%",
-				enabled: true,
-				createdAt: new Date().toISOString(),
-			},
-			{
-				id: 2,
-				name: "Low Disk Space",
-				description: "Triggered when disk space is below 10%",
-				enabled: false,
-				createdAt: new Date().toISOString(),
-			},
-			// Add more rules as needed
-		];
+		return data.alerts ?? [];
 	});
 
 
@@ -46,11 +31,11 @@
 		<Card.Root class="relative bg-[var(--foreground)] p-4 rounded-lg shadow-md gap-1">
 			<Card.Header class="bg-background rounded-lg border border-border items-center align-middle flex px-2 justify-between">
 				<Card.Title class="text-lg font-semibold border-border">{rule.name}</Card.Title>
-				<Switch  class="" checked={rule.enabled} onchange={() => rule.enabled = !rule.enabled} />
+				<Switch  class="" checked={rule.active ?? false} onchange={() => rule.active = !rule.active} />
 			</Card.Header>
 			<Card.Content>
 				<p class="text-md">{rule.description}</p>
-				<p class="text-sm text-muted-foreground">Created at: {new Date(rule.createdAt).toLocaleString()}</p>
+				<p class="text-sm text-muted-foreground">Created at: {new Date(rule.created ?? Date.now()).toLocaleString()}</p>
 
 			</Card.Content>
 
