@@ -1,10 +1,14 @@
 mod lib;
 mod proto;
+
+use std::collections::HashMap;
 use std::env;
 use crate::proto::monitor::{Component, LoadAverage, MetricsRequest, SystemInfoRequest};
 use proto::monitor::system_monitor_client::SystemMonitorClient;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::net::SocketAddr;
+use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use env_logger::Env;
@@ -14,7 +18,16 @@ use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 use log::{info, warn, error};
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio::net::{TcpListener, TcpStream};
 use dotenv::dotenv;
+use futures_channel::mpsc::{unbounded, UnboundedSender};
+use futures_util::{stream, future, pin_mut, stream::TryStreamExt, StreamExt};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
+
+type Tx = UnboundedSender<Message>;
+type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+
 
 #[derive(Clone)]
 pub struct SystemInstance {
@@ -45,6 +58,11 @@ impl SystemInstance {
 pub struct CoreConfig {
     pub server_url: String,
     pub agent_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TestMessage {
+    pub message: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -122,24 +140,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel::<CollectorRequest>();
 
    info!("Connecting to lynx-hub at {}", config.core.server_url);
-   let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
+   /*let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
         .connect()
-        .await?;
+        .await?;*/
 
-    let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
+   // let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
 
 
     info!("[agent] Starting sysinfo collector...");
-    tokio::spawn(sysinfo_collector(tx.clone()));
+    //tokio::spawn(sysinfo_collector(tx.clone()));
 
 
     info!("[agent] Starting metric collector...");
-    tokio::spawn(metric_collector(tx.clone()));
+    //tokio::spawn(metric_collector(tx.clone()));
 
+    let addr = env::var("LYNX_AGENT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let state = PeerMap::new(Mutex::new(HashMap::new()));
+    let try_socket = TcpListener::bind(&addr).await;
+    let listener = try_socket.expect("Failed to bind");
+    info!("[agent] Started websocket server at {}", addr);
     
-    // create a span for tracing
-    // wait for messages on the channel, then send to hub 
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        while let Ok((stream, addr)) = listener.accept().await {
+            let ws_stream = tokio_tungstenite::accept_async(stream).await
+                .expect("Failed to accept");
+
+            info!("[ws] Connection established: {}", addr);
+
+            let (tx, rx) = unbounded();
+            state_clone.lock().unwrap().insert(addr, tx);
+            
+            let (outgoing, incoming) = ws_stream.split();
+            
+            let broadcast_incoming = incoming.try_for_each(|msg| {
+                info!("Received message from {}: {}", addr, msg.to_text().unwrap());
+                
+                let peers = state_clone.lock().unwrap();
+                let broadcast_recipients =
+                    peers.iter().filter(|(peer_addr, _)| peer_addr == &&addr).map(|(_, ws_sink)| ws_sink);
+
+                for recp in broadcast_recipients {
+                    
+                    let command_output = Command::new("ls")
+                        .arg("-l")
+                        .output()
+                        .expect("Failed to execute command");
+                    let output_str = String::from_utf8_lossy(&command_output.stdout);
+                    info!("Command output: {}", output_str);
+                    // send message
+                    recp.unbounded_send(Message::Text(Utf8Bytes::from(output_str.to_string()))).unwrap()
+                }
+                
+                future::ok(())
+            });
+            
+            let receive_from_others = rx.map(Ok).forward(outgoing);
+            
+            pin_mut!(broadcast_incoming, receive_from_others);
+            future::select(broadcast_incoming, receive_from_others).await;
+            info!("{} disconnected", &addr);
+            state_clone.lock().unwrap().remove(&addr);
+        }
+    });
+    
+    let peers = state.clone();
     loop {
+        
+    }
+  /*  loop {
         match rx.recv() {
             Ok(request) => {
                 match request {
@@ -176,6 +245,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 error!("[agent] Error sending metrics to hub: {}", e);
                             }
                         }
+                        
+                        // Broadcast metrics to all connected peers'
+                        let peers_guard = peers.lock().unwrap();
+                        for (addr, tx) in peers_guard.iter() {
+                            if let Err(e) = tx.unbounded_send(Message::Text(Utf8Bytes::from("HELLLLOO"))) {
+                                error!("[agent] Error sending metrics to peer {}: {}", addr, e);
+                            } else {
+                                info!("[agent] Sent metrics to peer {}", addr);
+                            }
+                        }
                     }
                 }
             }
@@ -183,5 +262,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!("[agent] Error receiving metrics: {}", e);
             }
         }
-    }
+    }*/
 }
