@@ -1,3 +1,4 @@
+use std::fs;
 use crate::proto::monitor::system_monitor_server::{SystemMonitor, SystemMonitorServer};
 use crate::proto::monitor::{MetricsRequest, MetricsResponse, SystemInfoRequest, SystemInfoResponse};
 use axum::extract::State;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 use env_logger::Env;
 use log::{error, info};
 use tokio::net::TcpListener;
+use tonic::transport::server::{ServerTlsConfig};
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -306,6 +308,43 @@ mod lib;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
+    let current_dir = std::env::current_dir()?;
+    // certs are in current_dir/certs
+    let certs_dir = current_dir.join("certs");
+    if !certs_dir.exists() {
+        info!("[hub] Certificates directory not found: {:?}", certs_dir);
+        std::process::exit(1);
+    }
+    let server_cert_path = certs_dir.join("server.crt");
+    let server_key_path = certs_dir.join("server.key");
+    if !server_cert_path.exists() || !server_key_path.exists() {
+        info!("[hub] Server certificate or key not found in {:?}", certs_dir);
+        std::process::exit(1);
+    }
+
+    let server_cert = fs::read_to_string(server_cert_path)?;
+    let server_key = fs::read_to_string(server_key_path)?;
+    if server_cert.is_empty() || server_key.is_empty() {
+        info!("[hub] Server certificate or key is empty");
+        std::process::exit(1);
+    }
+    // CA certificate
+    let ca_cert_path = certs_dir.join("ca.crt");
+    if !ca_cert_path.exists() {
+        info!("[hub] CA certificate not found in {:?}", certs_dir);
+        std::process::exit(1);
+    }
+    if !Path::new("certs/ca.crt").exists() {
+        info!("[hub] CA certificate not found in certs directory");
+        std::process::exit(1);
+    }
+    let ca_cert = fs::read_to_string("certs/ca.crt")?;
+    let server_tls_config = ServerTlsConfig::new()
+        .identity(tonic::transport::Identity::from_pem(server_cert, server_key))
+        .client_ca_root(tonic::transport::Certificate::from_pem(ca_cert))
+        .client_auth_optional(false);
+
+
     let env = Env::default()
         .filter("MY_LOG_LEVEL")
         .write_style("MY_LOG_STYLE");
@@ -329,10 +368,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let addr = SocketAddr::from(([0, 0, 0, 0], 50051));
     let server = tonic::transport::Server::builder()
+        .tls_config(server_tls_config)?
         .add_service(SystemMonitorServer::new(monitor))
         .serve(addr);
     
-    info!("[hub] started on http://{}", addr);
+    info!("[hub] started on https://{}", addr);
     
     if let Err(e) = server.await {
         error!("Tonic server error: {}", e);

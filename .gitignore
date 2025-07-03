@@ -12,3 +12,5 @@ lynx-core/.env
 
 .idea
 lynx-agent/.env
+
+certs/

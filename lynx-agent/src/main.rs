@@ -2,21 +2,23 @@ mod lib;
 mod proto;
 
 use std::collections::HashMap;
-use std::env;
+use std::{env, fs};
 use crate::proto::monitor::{Component, LoadAverage, MetricsRequest, SystemInfoRequest};
 use proto::monitor::system_monitor_client::SystemMonitorClient;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use env_logger::Env;
+use env_logger::{init, Env};
 use sysinfo::{Components, ProcessRefreshKind, ProcessesToUpdate, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use tokio::time::Instant;
 use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
+use tonic::transport::channel::{ClientTlsConfig};
 use log::{info, warn, error};
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::net::{TcpListener, TcpStream};
@@ -24,6 +26,7 @@ use dotenv::dotenv;
 use futures_channel::mpsc::{unbounded, UnboundedSender};
 use futures_util::{stream, future, pin_mut, stream::TryStreamExt, StreamExt};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tonic::transport::{Certificate, Identity};
 
 type Tx = UnboundedSender<Message>;
 type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
@@ -122,7 +125,11 @@ async fn sysinfo_collector(tx: mpsc::Sender<CollectorRequest>) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // load config
    // env_logger::init();
+
+
+
     dotenv().ok();
+
 
     let env = Env::default()
         .filter("MY_LOG_LEVEL")
@@ -131,7 +138,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .format_timestamp_secs()
         .init();
     info!("[agent] Starting Lynx Agent...");
-    
+
+
+    let current_dir = std::env::current_dir()?;
+    // certs are in current_dir/certs
+    let certs_dir = current_dir.join("certs");
+    if !certs_dir.exists() {
+        error!("[hub] Certificates directory not found: {:?}", certs_dir);
+        std::process::exit(1);
+    }
+    let client_cert_path = certs_dir.join("agent.crt");
+    let client_key_path = certs_dir.join("agent.key");
+    if !client_cert_path.exists() || !client_key_path.exists() {
+        error!("[hub] client certificate or key not found in {:?}", certs_dir);
+        std::process::exit(1);
+    }
+    let client_cert = fs::read_to_string(client_cert_path)?;
+    let client_key = fs::read_to_string(client_key_path)?;
+    if client_cert.is_empty() || client_key.is_empty() {
+        error!("[hub] client certificate or key is empty");
+        std::process::exit(1);
+    }
+    // CA certificate
+    let ca_cert_path = certs_dir.join("ca.crt");
+    if !ca_cert_path.exists() {
+        error!("[hub] CA certificate not found in {:?}", certs_dir);
+        std::process::exit(1);
+    }
+    if !Path::new("certs/ca.crt").exists() {
+        error!("[hub] CA certificate not found in certs directory");
+        std::process::exit(1);
+    }
+    let ca_cert = fs::read_to_string("certs/ca.crt")?;
+    let client_tls_config = ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca_cert))
+        .identity(Identity::from_pem(client_cert, client_key)).domain_name("localhost");
+
     let config_str = std::fs::read_to_string("config.toml").map_err(|e| {
         error!("[agent] No config.toml found, please create one.");
         e
@@ -140,19 +182,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel::<CollectorRequest>();
 
    info!("Connecting to lynx-hub at {}", config.core.server_url);
-   /*let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
+   
+    
+    
+   let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
+        .tls_config(client_tls_config)?
         .connect()
-        .await?;*/
+        .await?;
 
-   // let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
+    let mut client = SystemMonitorClient::with_interceptor(channel, AuthInterceptor { agent_key: config.core.agent_key });
 
 
     info!("[agent] Starting sysinfo collector...");
-    //tokio::spawn(sysinfo_collector(tx.clone()));
+    tokio::spawn(sysinfo_collector(tx.clone()));
 
 
     info!("[agent] Starting metric collector...");
-    //tokio::spawn(metric_collector(tx.clone()));
+    tokio::spawn(metric_collector(tx.clone()));
 
     let addr = env::var("LYNX_AGENT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let state = PeerMap::new(Mutex::new(HashMap::new()));
@@ -206,9 +252,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let peers = state.clone();
     loop {
-        
-    }
-  /*  loop {
         match rx.recv() {
             Ok(request) => {
                 match request {
@@ -262,5 +305,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!("[agent] Error receiving metrics: {}", e);
             }
         }
-    }*/
+    }
 }

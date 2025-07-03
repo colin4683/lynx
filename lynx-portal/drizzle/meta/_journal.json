@@ -8,6 +8,13 @@
       "when": 1749493230607,
       "tag": "0000_mighty_hardball",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1751494946972,
+      "tag": "0001_minor_titania",
+      "breakpoints": true
     }
   ]
 }

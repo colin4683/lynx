@@ -1,9 +1,25 @@
-import { pgTable, foreignKey, integer, text, timestamp, unique, serial, boolean, doublePrecision, bigint, index } from "drizzle-orm/pg-core"
+import {
+	pgTable,
+	foreignKey,
+	integer,
+	text,
+	timestamp,
+	unique,
+	serial,
+	boolean,
+	doublePrecision,
+	bigint,
+	index,
+	customType
+} from 'drizzle-orm/pg-core';
 import { sql } from "drizzle-orm"
 import { relations } from 'drizzle-orm/relations';
-import { bytea } from '$lib/server/db/bytea';
 
-
+const bytea = customType<{ data: Buffer }>({
+	dataType() {
+		return 'bytea';
+	},
+});
 export const users = pgTable("users", {
 	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "users_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
 	email: text().notNull(),
