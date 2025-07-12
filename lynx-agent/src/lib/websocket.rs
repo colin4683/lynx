@@ -32,6 +32,8 @@ enum WsMessage {
     Stop,
     #[serde(rename = "output")]
     Output(String),
+    #[serde(rename = "EOF")]
+    EOF,
 }
 
 pub async fn stream_output(
@@ -83,6 +85,7 @@ pub async fn stream_output(
                 // This is a timeout to avoid blocking indefinitely
                 if child.try_wait().unwrap().is_some() {
                     info!("[command] Command has exited");
+                    recp.unbounded_send(Message::Text(Utf8Bytes::from("EOF"))).unwrap();
                     break;
                 }
             }
@@ -98,7 +101,12 @@ pub async fn start_command(command: String, args: Vec<String>, ws_sender: Tx) ->
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("Failed to start command");
+        .map_err(|e| {
+            ws_sender.unbounded_send(Message::Text(Utf8Bytes::from(format!("[ERROR] Failed to spawn command: {}", e)))).unwrap();
+            error!("[ERROR] Failed to spawn command: {}", e);
+            e
+        })
+        .expect("Failed to spawn command");
     let child_handle = Arc::new(Mutex::new(child));
     let terminate_signal = Arc::new(Notify::new());
     // Store the process information in the global map
@@ -176,29 +184,34 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                                             )))
                                             .unwrap();
                                     }
-
+                                    
                                     processes.remove(pid);
                                 }
                             });
                         }
+                        Ok(WsMessage::EOF) => {
+                            let peers_thread = peers_clone.clone();
+                            tokio::spawn(async move {
+                                peers_thread.lock().await.remove(&addr);
+                            });
+                            return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
+                                HandshakeIncomplete
+                            ));
+                        }
                         Err(e) => {
-                            info!("[ws] Failed to parse message: {}", e);
-                            tx.unbounded_send(Message::Text(Utf8Bytes::from(format!(
-                                "Error parsing message: {}",
-                                e
-                            ))))
-                            .unwrap();
+                            let peers_thread = peers_clone.clone();
+                            tokio::spawn(async move {
+                                peers_thread.lock().await.remove(&addr);
+                            });
                             return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
                                 HandshakeIncomplete
                             ));
                         }
                         _ => {
-                            info!("[ws] Unknown message type received");
-                            tx.unbounded_send(Message::Text(Utf8Bytes::from(
-                                "Unknown message type received",
-                            )))
-                            .unwrap();
-                            // disconnct if unknown message type
+                            let peers_thread = peers_clone.clone();
+                            tokio::spawn(async move {
+                                peers_thread.lock().await.remove(&addr);
+                            });
                             return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
                                 HandshakeIncomplete
                             ));
