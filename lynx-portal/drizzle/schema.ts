@@ -1,4 +1,4 @@
-import { pgTable, foreignKey, text, integer, boolean, timestamp, index, unique, serial, doublePrecision, bigint } from "drizzle-orm/pg-core"
+import { pgTable, foreignKey, text, integer, boolean, timestamp, index, unique, serial, doublePrecision, bigint, date } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -133,4 +133,22 @@ export const metrics = pgTable("metrics", {
 			foreignColumns: [systems.id],
 			name: "metrics_system_id_fkey"
 		}).onUpdate("cascade").onDelete("cascade"),
+]);
+
+export const alertHistory = pgTable("alert_history", {
+	id: integer().generatedAlwaysAsIdentity({ name: "alert_history_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	system: integer().notNull(),
+	alert: integer().notNull(),
+	date: date().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.alert],
+			foreignColumns: [alertRules.id],
+			name: "alert_history_alert_rules_id_fk"
+		}),
+	foreignKey({
+			columns: [table.system],
+			foreignColumns: [systems.id],
+			name: "alert_history_systems_id_fk"
+		}),
 ]);

@@ -7,6 +7,7 @@
 	import { Label } from '$lib/components/ui/label';
 	import {enhance} from '$app/forms';
 	import { goto } from '$app/navigation';
+	import { toast } from 'svelte-sonner'
 
 
 
@@ -18,31 +19,20 @@
 		next_operator?: string; // Optional for chaining expressions
 	}
 
-	let rules = $state([
-		{
-			id: 1,
-			field: 'cpu',
-			operator: '>',
-			value: '80',
-			next_operator: 'AND'
-		},
-		{
-			id: 2,
-			field: 'memory',
-			operator: '<',
-			value: '20',
-			next_operator: 'OR'
-		}
-	] as Expression[]);
+	let rules = $state([] as Expression[]);
 	let fieldValue = $state('');
 	let operatorValue = $state('');
 	let valueValue = $state('');
 	let editor =  $state('builder');
 	let ruleName = $state('');
 	let ruleDescription = $state('');
-
+	let valid = $state(false);
 	let rawExpression = $derived.by(() => {
-		return rules.map(rule => `${rule.field} ${rule.operator} ${rule.value}`).join(` ${rules[0].next_operator || 'AND'} `);
+		return rules.length > 0 ? rules.map(rule => `${rule.field} ${rule.operator} ${rule.value} ${rule.next_operator ?? 'OR'}`).join(' ') : '';
+	});
+
+	$effect(() => {
+		valid = !!rawExpression.length;
 	});
 
 	function sendForm() {
@@ -59,34 +49,35 @@
 				'Content-Type': 'application/json'
 			}
 		}).then(response => {
-			console.log(response);
 			if (response.ok) {
+				toast.success(`Created new alert rule: ${ruleName}`);
+				window.location.href = "/alerts";
 			} else {
-				alert('Failed to create rule.');
+				toast.error(`Failed to create alert rule: ${ruleName}`);
 			}
 		}).catch(error => {
-			console.error('Error creating rule:', error);
-			alert('An error occurred while creating the rule.');
+			toast.error('Error creating alert rule', {
+				description: error ?? "Unknown error occurred"
+			})
 		})
 	}
 
 </script>
 
-<div>
-	<h1 class="text-2xl font-bold">Create Rule</h1>
-	<p class="text-sm text-muted-foreground">Build expressions to create complex alert rules.</p>
-
-	<div class="flex items-center gap-2 mt-4">
+<div class="">
+	<div class="flex flex-col items-start gap-2 mt-4 w-full">
+		<h1 class="text-2xl font-bold">Create Rule</h1>
+		<p class="text-sm text-muted-foreground">Build expressions to create complex alert rules.</p>
 		<Switch checked={true} />
 		<span class="text-sm text-muted-foreground">Enable Rule</span>
 	</div>
 
-	<div class="flex items-center gap-2 mt-4">
-		<Input type="text" placeholder="Rule Name" class="input input-bordered w-64" bind:value={ruleName} />
-		<Input type="text" placeholder="Description" class="input input-bordered w-64" bind:value={ruleDescription} />
+	<div class="flex items-center gap-2 mt-4 w-full">
+		<Input autocomplete={null} aria-autocomplete="none" data-lpignore="true" type="text" placeholder="Rule Title" class="input input-bordered w-64" bind:value={ruleName} />
+		<Input autocomplete={null} aria-autocomplete="none" data-lpignore="true" type="text" placeholder="Description" class="input input-bordered w-64" bind:value={ruleDescription} />
 	</div>
 
-	<div class="mt-4 flex flex-col">
+	<div class="mt-4 flex flex-col max-w-[500px]">
 		<p class="text-sm text-muted-foreground mb-5">
 			Add conditions to your rule:
 			<span class={`cursor-pointer ${editor == "builder" ? 'text-primary' : 'text-muted-foreground'} transition-colors`} onclick={() => editor = "builder"}>Expression builder</span>
@@ -96,19 +87,43 @@
 
 		{#if editor === 'raw'}
 			<textarea
-				class="textarea textarea-bordered bg-[var(--foreground)] border border-border outline-none w-full h-32"
+				class="textarea textarea-bordered bg-[var(--foreground)] border border-border  text-sm font-mono outline-none w-full h-auto p-2"
 				bind:value={rawExpression}
 				onblur={() => {
+					if (!rawExpression.trim()) {
+						rules = [];
+						return;
+					}
+					try {
+
+						const nextOperators = rawExpression.match(/ AND | OR /g) || [];
+
 					rules = rawExpression.split(/ AND | OR /).map((expr, index) => {
 						const parts = expr.split(' ');
+						// check if parts are valid
+						if (parts.length < 3) {
+							throw new Error('Invalid expression format');
+						}
+						// Ensure the operator is valid
+						const validOperators = ['=', '!=', '>', '<'];
+						if (!validOperators.includes(parts[1])) {
+							throw new Error(`Invalid operator: ${parts[1]}`);
+						}
+						// find current AND/OR operator in original expression at the same index
+						const next_operator = nextOperators[index] ? nextOperators[index].trim() : '';
 						return {
 							id: index + 1,
 							field: parts[0],
 							operator: parts[1],
 							value: parts.slice(2).join(' '),
-							next_operator: index < rules.length - 1 ? (expr.includes('OR') ? 'OR' : 'AND') : undefined
+							next_operator:  next_operator
 						};
 					});
+					} catch (error) {
+						console.error('Error parsing expression:', error);
+						valid = false;
+						alert('Invalid expression format. Please check your input.');
+					}
 				}}
 			>
 			</textarea>
@@ -145,7 +160,7 @@
 				</span>
 				</div>
 			{/each}
-			<div class="flex items-center justify-between mb-2 gap-1">
+			<div class="flex items-center mb-2 gap-1">
 				<div class="flex items-center gap-2">
 					<Select.Root type="single" bind:value={fieldValue} onValueChange={(val) => {
 					fieldValue = val;
@@ -186,17 +201,24 @@
 					<Input type="text" placeholder="Value" bind:value={valueValue} class="input input-bordered w-32" />
 				</div>
 				<Button variant="ghost" size="icon" onclick={() => {
-				const newRule: Expression = {
-					id: rules.length + 1,
-					field: fieldValue || '',
-					operator: operatorValue || '',
-					value: valueValue || '',
-					next_operator: 'AND', // Default next operator
-				};
-				rules.push(newRule);
-				fieldValue = '';
-				operatorValue = '';
-				valueValue = '';
+					const newRule: Expression = {
+						id: rules.length + 1,
+						field: fieldValue || '',
+						operator: operatorValue || '',
+						value: valueValue || '',
+						next_operator: 'AND', // Default next operator
+					};
+					rules.push(newRule);
+					fieldValue = '';
+					operatorValue = '';
+					valueValue = '';
+					// check previous rule's next_operator
+					if (rules.length > 1) {
+						const lastRule = rules[rules.length - 2];
+						if (lastRule.next_operator === '') {
+							lastRule.next_operator = 'OR'; // Change last rule's next operator to AND
+						}
+					}
 			}}>
 					AND
 				</Button>
@@ -212,6 +234,12 @@
 				fieldValue = '';
 				operatorValue = '';
 				valueValue = '';
+						if (rules.length > 1) {
+						const lastRule = rules[rules.length - 2];
+						if (lastRule.next_operator === '') {
+							lastRule.next_operator = 'OR'; // Change last rule's next operator to AND
+						}
+					}
 			}}>
 					OR
 				</Button>
@@ -238,7 +266,7 @@
 	</div>
 
 	<div class="mt-4">
-		<Button class="bg-primary/50 border border-primary cursor-pointer active:scale-95" onclick={() => {
+		<Button  disabled={!valid} class="bg-primary/50 border border-primary cursor-pointer active:scale-95" onclick={() => {
 			sendForm();
 			// Reset form after submission
 			rules = [];

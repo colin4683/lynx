@@ -53,6 +53,7 @@
 		"d3-shape": "^3.2.0",
 		"drizzle-orm": "^0.40.0",
 		"postgres": "^3.4.5",
+		"svelte-sonner": "^1.0.5",
 		"uqr": "^0.1.2"
 	}
 }

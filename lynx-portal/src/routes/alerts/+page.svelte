@@ -3,6 +3,7 @@
 	import { Switch } from "$lib/components/ui/switch/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Button } from '$lib/components/ui/button';
+	import { toast } from 'svelte-sonner';
 
 	const { data } = $props();
 
@@ -31,7 +32,7 @@
 		<Card.Root class="relative bg-[var(--foreground)] p-4 rounded-lg shadow-md gap-1">
 			<Card.Header class="bg-background rounded-lg border border-border items-center align-middle flex px-2 justify-between">
 				<Card.Title class="text-lg font-semibold border-border">{rule.name}</Card.Title>
-				<Switch  class="" checked={rule.active ?? false} onchange={() => rule.active = !rule.active} />
+				<Switch  class="" checked={rule.active ?? false} />
 			</Card.Header>
 			<Card.Content>
 				<p class="text-md">{rule.description}</p>
