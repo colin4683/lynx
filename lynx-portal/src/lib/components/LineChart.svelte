@@ -26,16 +26,16 @@
 
 </script>
 
-<Chart.Container config={config} class="h-[300px] w-full">
+<Chart.Container config={config} class="h-[300px] w-full overflow-clip">
 	<AreaChart
 		data={data}
 		xScale={scaleBand().padding(0)}
 		x={x}
 		yNice
 		padding={{
-			top: 30,
+			top: 50,
 			right: 10,
-			bottom: 30,
+			bottom: 20,
 			left: 50
 		}}
 		legend
@@ -51,7 +51,7 @@
 			},
 			yAxis: { format: format ?? ((d) => d.toString()) },
 		}}
-		seriesLayout={stack ?? "stack"}
+		seriesLayout={stack ?? "overlap"}
 		series={series}>
 		{#snippet tooltip()}
 			<Chart.Tooltip indicator="dot"

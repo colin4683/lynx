@@ -33,9 +33,9 @@
 		x={x}
 		yNice
 		padding={{
-			top: 10,
+			top: 50,
 			right: 10,
-			bottom: 50,
+			bottom: 0,
 			left: 50
 		}}
 		legend

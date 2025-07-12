@@ -24,7 +24,8 @@ export async function validateToken(token: string): Promise<SessionValidationRes
 		with: {
 			user: {
 				columns: {
-					password: false
+					password: false,
+					recoveryCode: false
 				}
 			}
 		}

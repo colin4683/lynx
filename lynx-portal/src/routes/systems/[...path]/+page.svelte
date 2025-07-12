@@ -5,7 +5,7 @@
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import * as Select from '$lib/components/ui/select';
-
+	import CommandStream from '$lib/components/CommandStream.svelte';
 	const { data } = $props();
 	function relativeDate(date: string) : string {
 		const now = new Date();
@@ -218,14 +218,17 @@
 
 
 </script>
-
 <div class="w-full bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
-	<div class="w-full flex items-center align-middle justify-between">
+	<div class="w-full relative h-full flex items-center align-middle justify-between">
 		<p class="text-xl font-bold">
 			{data.system.label}
 			<span class={`w-3.5 h-3.5 inline-block rounded-full border animate-pulse ${data.system.active ? 'bg-green-300/60 border-green-400' : 'bg-red-400/60 border-red-400'}`}></span>
 		</p>
-		<div>
+		<div class="flex items-start justify-end gap-3 absolute right-0 -top-1/3">
+			<span class="icon-[fluent--alert-32-regular] text-white/80 hover:text-primary transition-colors active:scale-95 w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/alerts/history/${data.system.id}`}></span>
+			<CommandStream />
+		</div>
+		<div class="absolute right-0 -bottom-full h-full flex-col items-end gap-2">
 			<Select.Root type="single" bind:value={range}  onValueChange={(val) => {
 			$page.url.searchParams.set("range", range);
 			$page.url.searchParams.set("interval", interval);
@@ -274,8 +277,8 @@
 
 </div>
 
-
 <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-3">
+
 	<div class="w-full row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
 		<h1 class="text-lg font-extrabold">CPU Usage</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Percentage of CPU usage over the last {range}.</p>
@@ -308,7 +311,8 @@
 			config={loadChartConfig}
 			data={loadChartData}
 			x="time"
-			y="load_one"
+			y=""
+			stack="overlap"
 			format={(d) => `${d.toFixed(2)}`}
 		/>
 	</div>

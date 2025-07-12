@@ -43,19 +43,21 @@ export const load = async ({ params, url, depends }) => {
 		where: (systems, { eq }) => eq(systems.id, path_number),
 		with: {
 			metrics: {
-				orderBy: (metrics, {desc}) => desc(metrics.time),
+				orderBy: (metrics, { desc }) => desc(metrics.time),
 				limit: 15
 			}, // Include metrics if needed
 			disks: {
-				where: (disks, {gte}) => gte(disks.time, startTime.toISOString()),
-			}, // Include disks if needed
+				where: (disks, { gte }) => gte(disks.time, startTime.toISOString())
+			} // Include disks if needed
 		}
-	})
+	});
 
 	if (!system) {
 		error(404, 'System not found');
 	}
-	console.log(`Fetching metrics for system ${system.label} (${system.id}) from ${startTime.toISOString()} to ${now.toISOString()} with interval of ${intervalMinutes} minutes`);
+	console.log(
+		`Fetching metrics for system ${system.label} (${system.id}) from ${startTime.toISOString()} to ${now.toISOString()} with interval of ${intervalMinutes} minutes`
+	);
 
 	const metrics = await db.execute(sql`
 		WITH time_slots AS (
@@ -121,9 +123,9 @@ WHERE
 	AND time >= ${startTime.toISOString()}
 GROUP BY mount_point, time_slot
 ORDER BY time_slot ASC
-`)
+`);
 
-	console.log("REFRESHED SYSTEM PAGE");
+	console.log('REFRESHED SYSTEM PAGE');
 
 	// Return the path as a prop
 	return {

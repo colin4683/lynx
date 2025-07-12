@@ -10,7 +10,7 @@ import {
 	doublePrecision,
 	bigint,
 	index,
-	customType
+	customType, date
 } from 'drizzle-orm/pg-core';
 import { sql } from "drizzle-orm"
 import { relations } from 'drizzle-orm/relations';
@@ -80,6 +80,25 @@ export const alertSystems = pgTable("alert_systems", {
 		name: "alert_systems_systems_id_fk"
 	}),
 ]);
+
+export const alertHistory = pgTable("alert_history", {
+	id: integer().generatedAlwaysAsIdentity({ name: "alert_history_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	system: integer().notNull(),
+	alert: integer().notNull(),
+	date: date().notNull(),
+}, (table) => [
+	foreignKey({
+		columns: [table.alert],
+		foreignColumns: [alertRules.id],
+		name: "alert_history_alert_rules_id_fk"
+	}),
+	foreignKey({
+		columns: [table.system],
+		foreignColumns: [systems.id],
+		name: "alert_history_systems_id_fk"
+	}),
+]);
+
 
 export const systems = pgTable("systems", {
 	id: serial().primaryKey().notNull(),
@@ -205,6 +224,18 @@ export const alertSystemsRelations = relations(alertSystems, ({one}) => ({
 	}),
 	system: one(systems, {
 		fields: [alertSystems.systemId],
+		references: [systems.id]
+	}),
+}));
+
+
+export const alertHistoryRelations = relations(alertHistory, ({one}) => ({
+	alertRule: one(alertRules, {
+		fields: [alertHistory.alert],
+		references: [alertRules.id]
+	}),
+	system: one(systems, {
+		fields: [alertHistory.system],
 		references: [systems.id]
 	}),
 }));

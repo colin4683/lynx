@@ -3,6 +3,7 @@
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { onMount } from 'svelte';
+	import { Toaster } from 'svelte-sonner'
 	import AddServer from '$lib/components/AddServer.svelte';
 	let activeTab = $state('');
 
@@ -44,6 +45,11 @@
 
 		</div>
 	</nav>
+	<Toaster
+		theme="dark"
+		position="top-right"
+		richColors
+	/>
 	{@render children()}
 </div>
 
