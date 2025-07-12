@@ -16,7 +16,7 @@ use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
 
 type Tx = UnboundedSender<Message>;
-type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+type PeerMap = Arc<tokio::sync::Mutex<HashMap<SocketAddr, Tx>>>;
 
 #[derive(Deserialize, Debug)]
 pub struct CoreConfig {
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[agent] Starting metric collector...");
     tokio::spawn(lib::collectors::metric_collector(tx.clone()));
 
-    let state = PeerMap::new(Mutex::new(HashMap::new()));
+    let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // start websocket server
     let peers = state.clone();
