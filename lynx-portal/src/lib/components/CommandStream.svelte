@@ -2,65 +2,78 @@
 	import * as Dialog from "$lib/components/ui/dialog/index.js";
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input/index.js';
+	import { onDestroy } from 'svelte';
 
 	let command = $state('');
 	let output = $state<string[]>([]);
 	let executing = $state(false);
 	let scrollContainer: HTMLDivElement | null = null;
-
+	let socket: WebSocket | null = null;
 	function executeCommand() {
 		if (!command.trim()) return;
 
-		output = [];
+		output = [`$ ${command}`];
 		executing = true;
 
-		const commands: Record<string, string[]> = {
-			'ls': [
-				'Desktop  Documents  Downloads  Music  Pictures  Public  Templates  Videos',
-				'',
-				'Total items: 8'
-			],
-			'ps aux': [
-				'USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND',
-				'root         1  0.0  0.0 169316 13168 ?        Ss   Jul10   0:03 /sbin/init',
-				'root         2  0.0  0.0      0     0 ?        S    Jul10   0:00 [kthreadd]',
-				'user      1234  1.2  2.1 245678 45678 ?        Sl   Jul10   5:23 /usr/lib/firefox/firefox',
-				'',
-				'Total processes: 127'
-			],
-			'ping example.com': [
-				'PING example.com (93.184.216.34) 56(84) bytes of data.',
-				'64 bytes from 93.184.216.34: icmp_seq=1 ttl=54 time=12.3 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=2 ttl=54 time=11.8 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=3 ttl=54 time=13.2 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=4 ttl=54 time=12.5 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=1 ttl=54 time=12.3 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=2 ttl=54 time=11.8 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=3 ttl=54 time=13.2 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=4 ttl=54 time=12.5 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=1 ttl=54 time=12.3 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=2 ttl=54 time=11.8 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=3 ttl=54 time=13.2 ms',
-				'64 bytes from 93.184.216.34: icmp_seq=4 ttl=54 time=12.5 ms'
-			]
+		if (socket) socket.close();
+
+		socket = new WebSocket("ws://127.0.0.1:8080");
+
+		socket.onopen = () => {
+			socket?.send(JSON.stringify({
+				type: 'execute',
+				command: command.split(' ')[0],
+				args: command.split(' ').slice(1)
+			}));
 		}
 
-		const selectedOutput = commands[command] || [
-			`Command not found: ${command}`,
-			'',
-			'Available test commands: ls, ps aux, ping example.com'
-		];
+		socket.onerror = (error) => {
+			console.error('WebSocket error:', error);
+			executing = false;
+			socket?.close();
+		}
 
-		let i = 0;
-		const interval = setInterval(() => {
-			if (i < selectedOutput.length) {
-				output = [...output, selectedOutput[i]];
-				i++;
-			} else {
-				clearInterval(interval);
+		socket.onclose = () => {
+			if (executing) {
 				executing = false;
+				output = [...output, 'Connection closed unexpectedly.'];
 			}
-		}, 200);
+		}
+
+		socket.onmessage = (event) => {
+			// data is just raw text
+			const data = event.data;
+			if (data === 'EOF') {
+				executing = false;
+				socket?.send(JSON.stringify({ type: 'stop' }));
+				setTimeout(() => {
+					socket?.close()
+				}, 500);
+			} else {
+				output = [...output, data];
+			}
+		}
+	}
+
+	function stopCommand() {
+		if (socket && socket.readyState === WebSocket.OPEN) {
+			socket.send(JSON.stringify({ type: 'stop' }));
+			executing = false;
+			setTimeout(() => {
+				socket?.close();
+			}, 500);
+		}
+	}
+
+	function destroy() {
+		stopCommand();
+		if (socket) {
+			socket.close();
+			socket = null;
+		}
+		executing = false;
+		output = [];
+		command = '';
 	}
 
 	$effect(() => {
@@ -69,9 +82,19 @@
 		}
 	});
 
+
+
+	onDestroy(() => {
+		destroy();
+	})
+
 </script>
 
-<Dialog.Root>
+<Dialog.Root onOpenChange={(open) => {
+		if (!open) {
+			destroy();
+		}
+	}}>
 	<Dialog.Trigger class={"flex items-center justify-center"}
 	>
 		<span class="icon-[lucide--square-terminal] text-white/80 w-6 h-6 cursor-pointer hover:text-primary transition-colors active:scale-95"></span>
@@ -90,6 +113,7 @@
 			<div class="flex items-center align-middle gap-1.5">
 				<Input bind:value={command} type="text" placeholder="command to stream" class="outline-none active:outline-none focus:outline-none focus:ring-0 ring-0  active:ring-0" />
 				<Button onclick={() => executeCommand()} disabled={executing} variant="outline">{executing ? 'Running...' : 'Execute'}</Button>
+				<Button onclick={() => stopCommand()} disabled={!executing} variant="destructive">Stop</Button>
 			</div>
 
 			<div
