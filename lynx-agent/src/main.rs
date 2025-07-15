@@ -9,14 +9,15 @@ use serde::{Deserialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
+use crate::lib::websocket::PeerMap;
 
 type Tx = UnboundedSender<Message>;
-type PeerMap = Arc<tokio::sync::Mutex<HashMap<SocketAddr, Tx>>>;
 
 #[derive(Deserialize, Debug)]
 pub struct CoreConfig {
@@ -82,24 +83,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // start collectors
-    let (tx, rx) = mpsc::channel::<lib::collectors::CollectorRequest>();
+    // start collectors with async mpsc
+    let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(32);
 
     info!("[agent] Starting sysinfo collector...");
-    tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
+    let sysinfo_handle = tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
 
     info!("[agent] Starting metric collector...");
-    tokio::spawn(lib::collectors::metric_collector(tx.clone()));
+    let metric_handle = tokio::spawn(lib::collectors::metric_collector(tx.clone()));
 
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // start websocket server
     let peers = state.clone();
-    let _ = lib::websocket::start_websocket_server(peers).await;
+    let websocket_handle = tokio::spawn(async move {
+        let _ = lib::websocket::start_websocket_server(peers).await;
+    });
+
+    // Store handles in a vector for easy polling
+    let mut handles = vec![sysinfo_handle, metric_handle, websocket_handle];
 
     loop {
-        match rx.recv() {
-            Ok(request) => {
+        // Check if any tasks have finished or panicked
+        handles.retain(|handle| {
+            if handle.is_finished() {
+                info!("[agent] A background task has finished.");
+                false // Remove finished handle
+            } else {
+                true // Keep running handle
+            }
+        });
+
+        tokio::select! {
+            Some(request) = rx.recv() => {
                 match request {
                     lib::collectors::CollectorRequest::sysinfo(system_info) => {
                         info!("[agent] Sending system info to hub...");
@@ -143,9 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Err(e) => {
-                error!("[agent] Error receiving metrics: {}", e);
+            else => {
+                // Channel closed
+                error!("[agent] All collectors have shut down, exiting main loop.");
+                break;
             }
         }
     }
+    Ok(())
 }

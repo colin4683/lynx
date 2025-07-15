@@ -1,4 +1,3 @@
-use futures_channel::mpsc::{UnboundedSender, unbounded};
 use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -10,6 +9,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, Notify};
+use tokio::sync::mpsc::{self, Sender, Receiver, channel};
 
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use tokio_tungstenite::tungstenite::error::ProtocolError::{HandshakeIncomplete, WrongHttpMethod};
@@ -21,8 +21,10 @@ lazy_static::lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
-type Tx = UnboundedSender<Message>;
-type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+type Tx = Sender<Message>;
+type Rx = Receiver<Message>;
+pub type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")] // This is crucial for enum deserialization
 enum WsMessage {
@@ -59,15 +61,20 @@ pub async fn stream_output(
         tokio::select! {
             Ok(Some(line)) = stdout_reader.next_line() => {
                 //info!("[command:output] {}", line);
-                recp.unbounded_send(Message::Text(Utf8Bytes::from(line))).map_err(
-                    |e| info!("[ERROR] Failed to send output: {}", e)
-                ).unwrap();
+                // Use try_send to avoid blocking and handle full channel
+                if let Err(e) = recp.try_send(Message::Text(Utf8Bytes::from(line))) {
+                    info!("[ERROR] Failed to send output: {}", e);
+                    break;
+                }
                 // delay for a short period to avoid overwhelming the WebSocket
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
             Ok(Some(line)) = stderr_reader.next_line() => {
                 info!("[command:error] {}", line);
-                recp.unbounded_send(Message::Text(Utf8Bytes::from(format!("[ERROR] {}", line)))).unwrap();
+                if let Err(e) = recp.try_send(Message::Text(Utf8Bytes::from(format!("[ERROR] {}", line)))) {
+                    info!("[ERROR] Failed to send error output: {}", e);
+                    break;
+                }
             },
             _ = terminate_signal.notified() => {
                 info!("[command] Termination signal received, stopping command");
@@ -85,7 +92,9 @@ pub async fn stream_output(
                 // This is a timeout to avoid blocking indefinitely
                 if child.try_wait().unwrap().is_some() {
                     info!("[command] Command has exited");
-                    recp.unbounded_send(Message::Text(Utf8Bytes::from("EOF"))).unwrap();
+                    if let Err(e) = recp.try_send(Message::Text(Utf8Bytes::from("EOF"))) {
+                        info!("[ERROR] Failed to send EOF: {}", e);
+                    }
                     break;
                 }
             }
@@ -102,7 +111,7 @@ pub async fn start_command(command: String, args: Vec<String>, ws_sender: Tx) ->
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| {
-            ws_sender.unbounded_send(Message::Text(Utf8Bytes::from(format!("[ERROR] Failed to spawn command: {}", e)))).unwrap();
+            let _ = ws_sender.try_send(Message::Text(Utf8Bytes::from(format!("[ERROR] Failed to spawn command: {}", e))));
             error!("[ERROR] Failed to spawn command: {}", e);
             e
         })
@@ -139,10 +148,11 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                 .expect("Failed to accept");
 
             info!("[ws] Connection established: {}", addr);
-            let (tx, rx) = unbounded(); // Channels for current connection
+            // Use a bounded channel (e.g., 64 messages) to avoid memory leaks
+            let (tx, mut rx) = channel(64);
             peers_clone.lock().await.insert(addr, tx.clone());
 
-            let (outgoing, incoming) = ws_stream.split();
+            let (mut outgoing, incoming) = ws_stream.split();
             // Process incoming messages
             let incoming_messages = incoming.try_for_each(|msg| {
                 if let Ok(text) = msg.to_text() {
@@ -152,62 +162,34 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                             info!("[ws] Executing command: {} {:?}", command, args);
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
-                                let process_id =
-                                    start_command(command, args, tx_clone.clone()).await;
-                                tx_clone
-                                    .unbounded_send(Message::Text(Utf8Bytes::from(format!(
-                                        "Started command with ID: {}",
-                                        process_id
-                                    ))))
-                                    .unwrap();
+                                let process_id = start_command(command, args, tx_clone.clone()).await;
+                                let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
+                                    "Started command with ID: {}",
+                                    process_id
+                                ))));
                             });
                         }
                         Ok(WsMessage::Stop) => {
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
                                 let mut processes = RUNNING_PROCESSES.lock().await;
-                                for (pid, (child_handle, terminate_signal)) in
-                                    processes.clone().iter()
-                                {
+                                for (pid, (child_handle, terminate_signal)) in processes.clone().iter() {
                                     terminate_signal.notify_one();
                                     if let Err(e) = child_handle.lock().await.kill().await {
                                         info!("[ws] Failed to stop command {}: {}", pid, e);
-                                        tx_clone
-                                            .unbounded_send(Message::Text(Utf8Bytes::from(
-                                                format!("Failed to stop command {}: {}", pid, e),
-                                            )))
-                                            .unwrap();
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!("Failed to stop command {}: {}", pid, e),
+                                        )));
                                     } else {
-                                        tx_clone
-                                            .unbounded_send(Message::Text(Utf8Bytes::from(
-                                                format!("Stopped command {}", pid),
-                                            )))
-                                            .unwrap();
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!("Stopped command {}", pid),
+                                        )));
                                     }
-                                    
                                     processes.remove(pid);
                                 }
                             });
                         }
-                        Ok(WsMessage::EOF) => {
-                            let peers_thread = peers_clone.clone();
-                            tokio::spawn(async move {
-                                peers_thread.lock().await.remove(&addr);
-                            });
-                            return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
-                                HandshakeIncomplete
-                            ));
-                        }
-                        Err(e) => {
-                            let peers_thread = peers_clone.clone();
-                            tokio::spawn(async move {
-                                peers_thread.lock().await.remove(&addr);
-                            });
-                            return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
-                                HandshakeIncomplete
-                            ));
-                        }
-                        _ => {
+                        Ok(WsMessage::EOF) | Err(_) | _ => {
                             let peers_thread = peers_clone.clone();
                             tokio::spawn(async move {
                                 peers_thread.lock().await.remove(&addr);
@@ -222,7 +204,14 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
             });
 
             // Forward messages from rx thread to outgoing websocket stream
-            let outgoing_messages = rx.map(Ok).forward(outgoing);
+            let outgoing_messages = async move {
+                while let Some(msg) = rx.recv().await {
+                    if let Err(e) = outgoing.send(msg).await {
+                        error!("[ws] Failed to send message to {}: {}", addr, e);
+                        break;
+                    }
+                }
+            };
 
             // Run both tasks concurrently
             tokio::select! {
