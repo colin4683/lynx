@@ -1,45 +1,33 @@
+use crate::proto::monitor::{
+    Component, CpuStats, DiskStats, LoadAverage, MemoryStats, MetricsRequest, NetworkStats,
+    SystemInfoRequest,
+};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
-use std::collections::HashMap;
 use std::str::FromStr;
-use log::info;
+use sysinfo::{
+    Components, DiskKind, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, Uid,
+    Users,
+};
 #[cfg(not(target_os = "windows"))]
-use systemstat::{Platform, System as Systemstat};
-
-use crate::proto::monitor::{Component, CpuStats, DiskStats, LoadAverage, MemoryStats, MetricsRequest, NetworkStats, SystemInfoRequest};
-use sysinfo::{Components, DiskKind, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, Uid, Users};
+use systemstat::Platform;
 use tokio::time::Instant;
-/*
-- [ ]  System Information
-    - [ ]  Hostname
-    - [ ]  Operating System
-    - [ ]  Kernal Information
-    - [ ]  Uptime
-    - [ ]  Users
-         - [ ] UID
-         - [ ] GID
-         - [ ] Name
-         - [ ] Groups
-    - [ ]  Boot time
-    - [ ]  System specs (cpu model, motherboard, etc.)
-    - [ ]  Load average
-- [ ]  Metrics
-    - [ ]  CPU Information:
-        - [ ]  % usage
-    - [ ]  Memory information
-        - [ ]  Total
-        - [ ]  Used
-    - [ ]  Network Information
-        - [ ]  Incoming
-        - [ ]  Outgoing
-    - [ ]  Disk Information
-        - [ ]  Disk names
-        - [ ]  Space left / used
-        - [ ]  I/O
-    - [ ]  Components
-        - [ ]  Component Name
-        - [ ]  Temperature
- */
+
+macro_rules! to_kb {
+    ($x:expr) => {
+        $x / 1024
+    };
+}
+macro_rules! to_mb {
+    ($x:expr) => {
+        $x / 1024 / 1024
+    };
+}macro_rules! to_gb {
+    ($x:expr) => {
+        $x / 1024 / 1024 / 1024
+    };
+}
+
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
 pub struct SystemInfo {
     pub hostname: String,
@@ -99,6 +87,107 @@ pub async fn collect_system_info(system: &mut System) -> SystemInfoRequest {
     }
 }
 
+fn collect_cpu_stats(system: &System) -> CpuStats {
+    let cpu_usage = system
+        .cpus()
+        .iter()
+        .fold(0.0, |acc, cpu| acc + cpu.cpu_usage())
+        / system.cpus().len() as f32;
+    CpuStats {
+        usage_percent: cpu_usage as f64,
+    }
+}
+
+fn collect_memory_stats(system: &System) -> MemoryStats {
+    MemoryStats {
+        total_kb: to_kb!(system.total_memory()),
+        used_kb: to_kb!(system.used_memory()),
+        free_kb: to_kb!(system.free_memory()),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn collect_component_stats() -> Vec<Component> {
+    // Temperature sensors are not supported on Windows by sysinfo
+    Vec::new()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn collect_component_stats() -> Vec<Component> {
+    let components = Components::new_with_refreshed_list();
+    components
+        .iter()
+        .map(|c| {
+            let temp = c.temperature().unwrap_or(0.0);
+            Component {
+                label: c.label().to_string(),
+                temperature: temp as f32,
+            }
+        })
+        .collect()
+}
+
+async fn collect_disk_stats() -> Vec<DiskStats> {
+    let sys_disks = sysinfo::Disks::new_with_refreshed_list();
+    let disks = sys_disks
+        .iter()
+        .map(|d| {
+            let name = d.name().to_string_lossy().into_owned();
+            let mount_point = d.mount_point().to_str().unwrap_or("").to_string();
+            let total_space = d.total_space();
+            let available_space = d.available_space();
+            DiskStats {
+                name,
+                used_space: to_gb!(total_space - available_space) as i32,
+                total_space: to_gb!(total_space) as i32,
+                read_bytes: d.usage().total_read_bytes as f64,
+                write_bytes: d.usage().total_written_bytes as f64,
+                unit: "gb".to_string(),
+                mount_point,
+            }
+        })
+        .collect();
+    disks
+}
+
+#[cfg(target_os = "windows")]
+fn collect_load_average(_system: &System) -> LoadAverage {
+    // Windows does not support load average, return zeros
+    LoadAverage {
+        one_minute: 0.0,
+        five_minutes: 0.0,
+        fifteen_minutes: 0.0,
+    }
+}
+
+
+fn collect_load_average(system: &System) -> LoadAverage {
+    let load = System::load_average();
+    LoadAverage {
+        one_minute: load.one,
+        five_minutes: load.five,
+        fifteen_minutes: load.fifteen,
+    }
+}
+
+
+async fn collect_network_stats() -> NetworkStats {
+    let get_network_totals = |networks: &sysinfo::Networks| {
+        networks.values().fold((0, 0), |(mut in_acc, mut out_acc), net| {
+            in_acc += net.total_received();
+            out_acc += net.total_transmitted();
+            (in_acc, out_acc)
+        })
+    };
+    let (net_in, net_out) = get_network_totals(&Networks::new_with_refreshed_list());
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let (net_in2, net_out2) = get_network_totals(&Networks::new_with_refreshed_list());
+    NetworkStats {
+        r#in: to_mb!(net_in2 - net_in),
+        out: to_mb!(net_out2 - net_out),
+    }
+}
+
 pub async fn collect_metrics(system: &mut System) -> MetricsRequest {
     system.refresh_all();
     tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
@@ -107,139 +196,18 @@ pub async fn collect_metrics(system: &mut System) -> MetricsRequest {
         true,
         ProcessRefreshKind::nothing().with_cpu(),
     );
-    
-    let cpu_usage = system.cpus().iter().fold(0.0, |acc, cpu| {
-        acc + cpu.cpu_usage()
-        
-    }) / system.cpus().len() as f32;
-
-    let memory_stats = MemoryStats {
-        total_kb: system.total_memory() / 1024, // Convert to KB
-        used_kb: system.used_memory() / 1024,
-        free_kb: system.free_memory() / 1024,
-    };
-    let sys_disks = sysinfo::Disks::new_with_refreshed_list();
-    let mut sys_disks = sys_disks
-        .into_iter()
-        .filter(|d| {
-            ((d.mount_point().to_str().unwrap_or("") == "/")
-                || (d.mount_point().to_str().unwrap_or("") == "/mnt"))
-        })
-        .collect::<Vec<_>>();
-
-    let mut prev_stats: Vec<(String, u64, u64, Instant)> = sys_disks
-        .iter()
-        .find(|d| d.mount_point().to_str().unwrap_or("") == "/")
-        .into_iter()
-        .map(|d| (
-            d.name().to_string_lossy().into_owned(),
-            d.usage().total_read_bytes,
-            d.usage().total_written_bytes,
-            Instant::now()
-        ))
-        .collect();
-
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-    let sys_disks = sysinfo::Disks::new_with_refreshed_list();
-
-    let disks = sys_disks
-        .iter()
-        .find(|d| d.mount_point().to_str().unwrap_or("") == "/")
-        .into_iter()
-        .map(|d| {
-            let name = d.name().to_string_lossy().into_owned();
-            let mount_point = d.mount_point().to_str().unwrap_or("").to_string();
-            let total_space = d.total_space();
-            let available_space = d.available_space();
-            let current_read = d.usage().total_read_bytes;
-            let current_write = d.usage().total_written_bytes;
-            let current_time = Instant::now();
-
-            // Find previous stats for this disk
-            let binding = (name.clone(), 0, 0, current_time);
-            let prev = prev_stats.iter()
-                .find(|(n, _, _, _)| n == &name)
-                .unwrap_or(&binding);
-
-            // Calculate throughput (bytes per second)
-            let time_diff = current_time.duration_since(prev.3).as_secs_f64();
-            let read_throughput = if time_diff > 0.0 {
-                (current_read - prev.1) as f64 / time_diff
-            } else { 0.0 };
-            let write_throughput = if time_diff > 0.0 {
-                (current_write - prev.2) as f64 / time_diff
-            } else { 0.0 };
-
-            // Update previous stats for next iteration
-            if let Some(pos) = prev_stats.iter().position(|(n, _, _, _)| n == &name) {
-                prev_stats[pos] = (name.clone(), current_read, current_write, current_time);
-            }
-
-            DiskStats {
-                name: name,
-                used_space: ((total_space - available_space) / 1024 / 1024 / 1024) as i32,
-                total_space: (total_space / 1024 / 1024 / 1024) as i32,
-                read_bytes: read_throughput,
-                write_bytes: write_throughput,
-                unit: "gb".to_string(),
-                mount_point,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let (net_in, net_out) = sysinfo::Networks::new_with_refreshed_list().values().fold(
-        (0, 0),
-        |(mut in_acc, mut out_acc), net| {
-            in_acc += net.total_received();
-            out_acc += net.total_transmitted();
-            (in_acc, out_acc)
-        },
-    );
-    
-    // sleep for 1 second
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    let (net_in2, net_out2) = sysinfo::Networks::new_with_refreshed_list().values().fold(
-        (0, 0),
-        |(mut in_acc, mut out_acc), net| {
-            in_acc += net.total_received();
-            out_acc += net.total_transmitted();
-            (in_acc, out_acc)
-        },
-    );
-    
-    let net_in = (net_in2 - net_in) / 1024; // Convert to KB
-    let net_out = (net_out2 - net_out) / 1024; // Convert to KB
-
-    let components = Components::new_with_refreshed_list();
-    let components_dump = components
-        .iter()
-        .map(|c| {
-            let temp = c.temperature().unwrap_or(0.0);
-            Component {
-                label: c.label().to_string(),
-                temperature: temp,
-            }
-        })
-        .collect::<Vec<Component>>();
-
-    let load_average = LoadAverage {
-        one_minute: System::load_average().one,
-        five_minutes: System::load_average().five,
-        fifteen_minutes: System::load_average().fifteen,
-    };
-
+    let cpu_stats = collect_cpu_stats(system);
+    let memory_stats = collect_memory_stats(system);
+    let disk_stats = collect_disk_stats().await;
+    let network_stats = collect_network_stats().await;
+    let components = collect_component_stats();
+    let load_average = collect_load_average(system);
     MetricsRequest {
-        cpu_stats: Option::from(CpuStats {
-            usage_percent: cpu_usage as f64,
-        }),
-        memory_stats: Option::from(memory_stats),
-        disk_stats: disks,
-        network_stats: Option::from(NetworkStats {
-            r#in: net_in,
-            r#out: net_out,
-        }),
-        components: components_dump,
-        load_average: Option::from(load_average),
+        cpu_stats: Some(cpu_stats),
+        memory_stats: Some(memory_stats),
+        disk_stats,
+        components,
+        network_stats: Some(network_stats),
+        load_average: Some(load_average),
     }
 }

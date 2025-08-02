@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Connecting to lynx-hub at {}", config.core.server_url);
 
-    // connect to grpc
+    // Connect to gRPC server with mTLS
     let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
         .tls_config(client_tls_config)?
         .connect()
@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // start collectors with async mpsc
+    // Start collectors with async mpsc
     let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(32);
 
     info!("[agent] Starting sysinfo collector...");
