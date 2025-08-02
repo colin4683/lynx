@@ -6,7 +6,23 @@
 	import { page } from '$app/stores';
 	import * as Select from '$lib/components/ui/select';
 	import CommandStream from '$lib/components/CommandStream.svelte';
+	import { afterNavigate } from '$app/navigation';
+	import { onMount, onDestroy } from 'svelte';
+	let pollInterval: ReturnType<typeof setInterval> | null = null;
+	let countDownInterval: ReturnType<typeof setInterval> | null = null;
+	let pollTimeout: ReturnType<typeof setTimeout> | null = null;
+	let savedScrollY = 0;
 	const { data } = $props();
+	function saveScroll() {
+		savedScrollY = window.scrollY;
+		sessionStorage.setItem('scrollY', savedScrollY.toString());
+	}
+
+	afterNavigate(() => {
+		const y = Number(sessionStorage.getItem('scrollY') ?? '0');
+		window.scrollTo(0, y);
+	});
+
 	function relativeDate(date: string) : string {
 		const now = new Date();
 		const diff = now.getTime() - new Date(date).getTime();
@@ -28,6 +44,8 @@
 	}
 
 	let range = $state($page.url.searchParams.get("range") ?? "30 minutes");
+	let timeLeft = $state(0);
+	let nextTimeslot = $state('');
 
 	let interval = $derived.by(() => {
 		switch (range) {
@@ -130,10 +148,11 @@
 	})
 
 	const diskChartData = $derived.by(() => {
+		console.log(data.disks);
 		return data.disks.map((disk: any) => ({
 			time: new Date(disk.time_slot).toLocaleTimeString('it-IT'),
-			read: disk.read_total ? disk.read_total / 1024 / 1024 : 0,
-			write: disk.write_total ? disk.write_total / 1024 / 1024 : 0,
+			read: disk.read_total ? disk.read_total / 1024 / 1024 / 1024 : 0,
+			write: disk.write_total ? disk.write_total / 1024 / 1024 / 1024 : 0,
 		}))
 	})
 	const diskChartConfig = $state({
@@ -172,7 +191,7 @@
 			return {
 				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
 				...Object.fromEntries(
-					Object.entries(component_temp_array).map(([key, value]) => [(value as any).label, (value as any).avg_temperature])
+					(Object.entries(component_temp_array ?? []) ?? []).map(([key, value]) => [(value as any).label, (value as any).avg_temperature])
 				)
 			}
 		})
@@ -213,12 +232,150 @@
 		return config;
 	});*/
 
+	onMount(() => {
+		const saveScroll = () => {
+			sessionStorage.setItem('scrollY', window.scrollY.toString());
+		};
+		window.addEventListener('scroll', saveScroll);
+		return () => window.removeEventListener('scroll', saveScroll);
+	});
 
-	console.log("Temperature Data:", temperatureData);
+	function getLiveIntervalFromData() {
+		// Database receives new metrics every minute
+		return 60;
+	}
+
+	function getMsToNextMinute() {
+		const now = new Date();
+		return 60000 - (now.getSeconds() * 1000 + now.getMilliseconds());
+	}
+
+	function getMsToNextMetric() {
+		const lastMetric = data.metrics[data.metrics.length - 1];
+		console.log("Last metric:", lastMetric);
+		if (!lastMetric || !lastMetric.time_slot) {
+			// fallback to 1 minute from now
+			return 60000;
+		}
+		const last = new Date(String(lastMetric.time_slot));
+		const now = new Date();
+		const intervalMs = 60 * 1000; // 1 minute in ms
+		const nextMetric = new Date(last.getTime() + intervalMs);
+		console.log("Next metric:", nextMetric);
+
+		const msToNext = nextMetric.getTime() - now.getTime();
+		// If we're already past the next metric, schedule for the next interval after now
+		if (msToNext <= 0) {
+			const missed = Math.ceil((now.getTime() - last.getTime()) / intervalMs);
+			return (last.getTime() + (missed + 1) * intervalMs) - now.getTime();
+		}
+		return msToNext;
+	}
+
+	function parseTimeSlotToLocalDate(timeSlot) {
+		// timeSlot: 'YYYY-MM-DD HH:MM:SS'
+		const [datePart, timePart] = timeSlot.split(' ');
+		const [year, month, day] = datePart.split('-').map(Number);
+		const [hour, minute, second] = timePart.split(':').map(Number);
+		return new Date(year, month - 1, day, hour, minute, second);
+	}
+
+	function startPolling() {
+		stopPolling(); // Clear any existing intervals/timeouts
+
+		const metricsArr = data.metrics;
+		const lastMetric = metricsArr[data.metrics.length - 1]; // Most recent metric (DESC order)
+		if (!lastMetric || !lastMetric.time_slot) {
+			// fallback: refresh in 1 minute
+			pollTimeout = setTimeout(refreshMetrics, 61000);
+			timeLeft = 61;
+			countDownInterval = setInterval(() => {
+				if (timeLeft > 0) timeLeft -= 1;
+			}, 1000);
+			return;
+		}
+		const last = parseTimeSlotToLocalDate(String(lastMetric.time_slot));
+		const now = new Date();
+		const nextMetric = new Date(last.getTime() + 61000); // exactly 1 minute after last metric, including seconds
+		let msToNext = nextMetric.getTime() - now.getTime();
+		if (msToNext < 0) msToNext = 61000; // If already past, refresh ASAP
+		console.log("Last metric:", last);
+		console.log("Next metric:", nextMetric);
+		console.log("Now:", now);
+		console.log("Milliseconds to next metric:", msToNext);
+
+		timeLeft = Math.ceil(msToNext / 1000);
+
+		countDownInterval = setInterval(() => {
+			if (timeLeft > 0) timeLeft -= 1;
+		}, 1000);
+
+		pollTimeout = setTimeout(() => {
+			refreshMetrics();
+			startPolling(); // Schedule next poll after refresh
+		}, msToNext);
+	}
+
+	function refreshMetrics() {
+		invalidate('app:systems');
+		if (pollInterval) {
+			clearInterval(pollInterval);
+			pollInterval = null;
+		}
+		if (countDownInterval) {
+			clearInterval(countDownInterval);
+			countDownInterval = null;
+		}
+		if (pollTimeout) {
+			clearTimeout(pollTimeout);
+			pollTimeout = null;
+		}
+		startPolling();
+		saveScroll();
+		invalidateAll();
+		window.scrollTo(0, savedScrollY);
+	}
+
+	function stopPolling() {
+		if (pollInterval) {
+			clearInterval(pollInterval);
+			pollInterval = null;
+		}
+		if (countDownInterval) {
+			clearInterval(countDownInterval);
+			countDownInterval = null;
+		}
+		if (pollTimeout) {
+			clearTimeout(pollTimeout);
+			pollTimeout = null;
+		}
+	}
+
+	function refreshChart(start: number, end: number) {
+		$page.url.searchParams.set("startDate", `${start}`);
+		$page.url.searchParams.set("endDate", `${end}`);
+		$page.url.searchParams.set("interval", "1");
+		goto($page.url.pathname + "?" + $page.url.searchParams.toString(), {
+			invalidate: ['app:systems']
+		});
+	}
+
+	$effect(() => {
+		if (range === "Live") {
+			startPolling();
+		} else {
+			stopPolling();
+			timeLeft = 0;
+		}
+	});
+
+	onDestroy(() => {
+		stopPolling();
+	});
 
 
 </script>
-<div class="w-full bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
+<div class="w-full bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
 	<div class="w-full relative h-full flex items-center align-middle justify-between">
 		<p class="text-xl font-bold">
 			{data.system.label}
@@ -230,19 +387,33 @@
 		</div>
 		<div class="absolute right-0 -bottom-full h-full flex-col items-end gap-2">
 			<Select.Root type="single" bind:value={range}  onValueChange={(val) => {
-			$page.url.searchParams.set("range", range);
-			$page.url.searchParams.set("interval", interval);
-			goto($page.url.pathname + "?" + $page.url.searchParams.toString(), {
-				invalidate: ['app:systems']
-			 });
+				$page.url.searchParams.set("range", range);
+				$page.url.searchParams.set("interval", interval);
+				if ($page.url.searchParams.get("startDate")) {
+					$page.url.searchParams.delete("startDate");
+				}
+				if ($page.url.searchParams.get("endDate")) {
+					$page.url.searchParams.delete("endDate");
+				}
+				goto($page.url.pathname + "?" + $page.url.searchParams.toString(), {
+					invalidate: ['app:systems']
+				 });
 		}}>
 				<Select.Trigger class="w-[180px] flex items-center align-middle gap-0">
 					<span class="flex items-center gap-2">
 						<span class="icon-[hugeicons--date-time] w-4 h-4"></span>
 						<span class="text-sm">{range}</span>
+						{#if range === "Live"}
+							<span class="text-xs text-muted-foreground">
+								{timeLeft}s
+							</span>
+						{/if}
 					</span>
 				</Select.Trigger>
 				<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
+					<Select.Item value="Live">
+						Live
+					</Select.Item>
 					<Select.Item value="5 minutes">5 minutes</Select.Item>
 					<Select.Item value="30 minutes">30 minutes</Select.Item>
 					<Select.Item value="1 hour">1 hour</Select.Item>
@@ -279,19 +450,20 @@
 
 <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-3">
 
-	<div class="w-full row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
+	<div class="w-full row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border">
 		<h1 class="text-lg font-extrabold">CPU Usage</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Percentage of CPU usage over the last {range}.</p>
-		<CPUChart
+		<LineChart
 			config={cpuChartConfig}
 			data={cpuChartData}
 			x="time"
 			y="cpu"
 			format={(d) => `${d}%`}
+			onEvent={refreshChart}
 		/>
 	</div>
 
-	<div class="w-full row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
+	<div class="w-full row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border">
 		<h1 class="text-lg font-extrabold">Memory Usage</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Memory usage in gigabytes over the last {range}.</p>
 		<LineChart
@@ -301,10 +473,11 @@
 			y="total"
 			stack="overlap"
 			format={(d) => `${d.toFixed(2)}gb`}
+			onEvent={refreshChart}
 		/>
 	</div>
 
-	<div class="row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
+	<div class="row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border">
 		<h1 class="text-lg font-extrabold">Load</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Number of processes using or waiting for CPU resources over the last one,five,and fifteen minutes, respectively.</p>
 		<LineChart
@@ -314,10 +487,11 @@
 			y=""
 			stack="overlap"
 			format={(d) => `${d.toFixed(2)}`}
+			onEvent={refreshChart}
 		/>
 	</div>
 
-	<div class="row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
+	<div class="row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border">
 		<h1 class="text-lg font-extrabold">Network Usage</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Network traffic in megabytes per second over the last {range}.</p>
 		<LineChart
@@ -326,10 +500,11 @@
 			x="time"
 			y="net_in"
 			format={(d) => `${d.toFixed(2)}mb/s`}
+			onEvent={refreshChart}
 		/>
 	</div>
 
-	<div class={`row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]`}>
+	<div class={`row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border`}>
 		<h1 class="text-lg font-extrabold">Disk I/O</h1>
 		<p class="text-xs text-muted-foreground -mt-3 ">Disk read and write speeds in megabytes per second over the last {range}.</p>
 		<LineChart
@@ -338,10 +513,11 @@
 			x="time"
 			y="read"
 			format={(d) => `${d.toFixed(2)}mb/s`}
+			onEvent={refreshChart}
 		/>
 	</div>
 
-	<div class={`row-span-2 bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]`}>
+	<div class={`row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border`}>
 		<h1 class="text-lg font-extrabold">Component Temperatures</h1>
 		<p class="text-xs text-muted-foreground -mt-3 ">Component temperatures over the last {range}.</p>
 		<LineChart
@@ -351,6 +527,7 @@
 			y=""
 			stack="overlap"
 			format={(d) => `${d.toFixed(2)}°C`}
+			onEvent={refreshChart}
 		/>
 	</div>
 </div>

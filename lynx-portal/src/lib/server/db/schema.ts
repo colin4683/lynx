@@ -85,7 +85,7 @@ export const alertHistory = pgTable("alert_history", {
 	id: integer().generatedAlwaysAsIdentity({ name: "alert_history_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
 	system: integer().notNull(),
 	alert: integer().notNull(),
-	date: date().notNull(),
+	date: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
 }, (table) => [
 	foreignKey({
 		columns: [table.alert],
@@ -98,6 +98,7 @@ export const alertHistory = pgTable("alert_history", {
 		name: "alert_history_systems_id_fk"
 	}),
 ]);
+
 
 
 export const systems = pgTable("systems", {
