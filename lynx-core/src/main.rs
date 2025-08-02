@@ -148,8 +148,9 @@ impl SystemMonitor for MyMonitor {
 
         // spawn thread to process notification rukes
         let metrics_thread = metrics.clone();
+        let pool_clone = self.pool.clone();
         tokio::spawn(async move {
-            if let Err(e) = lib::notify::process_notification(&metrics_thread).await {
+            if let Err(e) = lib::notify::process_notification(&metrics_thread, system.id, &pool_clone).await {
                 error!("[hub] Failed to process notification rules: {}", e);
             }
         });

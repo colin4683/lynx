@@ -1,7 +1,9 @@
-use std::fmt::Error;
 use log::info;
-use thiserror::Error;
+use regex::Regex;
 use reqwest::Client;
+use sqlx::Row;
+use std::fmt::Error;
+use thiserror::Error;
 
 #[derive(Debug)]
 pub struct NotificationRule {
@@ -10,7 +12,7 @@ pub struct NotificationRule {
     pub enabled: bool,
     pub description: String,
     pub conditions: Vec<Condition>,
-    pub actions: Vec<String>
+    pub actions: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -19,38 +21,94 @@ pub struct Condition {
     pub metric: String,
     pub operator: String,
     pub value: String,
-    pub next_compare: Option<String>
+    pub next_compare: Option<String>,
 }
 
 pub async fn process_notification(
-    metrics: &crate::proto::monitor::MetricsRequest
+    metrics: &crate::proto::monitor::MetricsRequest,
+    system_id: i32,
+    pool: &sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let alerts = sqlx::query(
+        r#"
+SELECT rule_id
+FROM alert_systems
+WHERE system_id = $1
+"#,
+    )
+    .bind(system_id)
+    .fetch_all(pool)
+    .await?;
 
-    let rules = vec![
-        NotificationRule {
-            id: "1".to_string(),
-            name: "Test Rule 1".to_string(),
-            enabled: true,
-            description: "Test Rule".to_string(),
-            conditions: vec![
-                Condition {
-                    component: "cpu".to_string(),
-                    metric: "usage".to_string(),
-                    operator: ">".to_string(),
-                    value: "60".to_string(),
-                    next_compare: Some("and".to_string())
-                },
-                Condition {
-                    component: "memory".to_string(),
-                    metric: "usage".to_string(),
-                    operator: "<".to_string(),
-                    value: "70".to_string(),
-                    next_compare: None
-                }
-            ],
-            actions: vec!["discord".to_string()]
+    let mut rules = Vec::new();
+    for alert in alerts {
+        let id_i32: i32 = alert.get("rule_id");
+
+        let row = sqlx::query(
+            r#"
+SELECT id, name, active, expression, severity
+FROM alert_rules
+WHERE id=$1
+AND active = true
+"#,
+        )
+        .bind(id_i32)
+        .fetch_one(pool)
+        .await?;
+
+        let id: i32 = row.get("id");
+        let name: String = row.get("name");
+        let enabled: bool = row.get("active");
+        let expression: String = row.get("expression");
+        let severity: String = row.get("severity");
+        let mut conditions = Vec::new();
+        let mut actions = Vec::new();
+
+        // First split into component parts (e.g., "system.cpu > 50" -> ["system", "cpu > 50"])
+        let component_re =
+            Regex::new(r"^([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*([<>!=]+)\s*([a-zA-Z0-9_.]+)")
+                .unwrap();
+
+        // Split the expression at logical operators while preserving them
+        let logical_re = Regex::new(r"\s+(AND|OR)\s+").unwrap();
+        let segments: Vec<&str> = logical_re.split(&expression).collect();
+        let operators: Vec<&str> = logical_re
+            .find_iter(&expression)
+            .map(|m| m.as_str().trim())
+            .collect();
+
+        for (i, segment) in segments.iter().enumerate() {
+            if let Some(caps) = component_re.captures(segment) {
+                let component = caps.get(1).unwrap().as_str().to_string();
+                let metric = caps.get(2).unwrap().as_str().to_string();
+                let operator = caps.get(3).unwrap().as_str().to_string();
+                let value = caps.get(4).unwrap().as_str().to_string();
+                let next_compare = if i < operators.len() {
+                    Some(operators[i].to_string())
+                } else {
+                    None
+                };
+                conditions.push(Condition {
+                    component,
+                    metric,
+                    operator,
+                    value,
+                    next_compare,
+                });
+            }
         }
-    ];
+        actions.push(severity);
+        rules.push(NotificationRule {
+            id: id.to_string(),
+            name,
+            enabled,
+            description: "poop".to_string(),
+            conditions,
+            actions,
+        });
+    }
+
+    info!("Rules: {:?}", rules);
 
     // Process the metrics and apply rules where applicable
     for rule in rules {
@@ -58,7 +116,11 @@ pub async fn process_notification(
         for condition in &rule.conditions {
             let metric_value = match condition.component.as_str() {
                 "cpu" => metrics.cpu_stats.unwrap().usage_percent,
-                "memory" => metrics.memory_stats.unwrap().used_kb as f64 / metrics.memory_stats.unwrap().total_kb as f64 * 100.0,
+                "memory" => {
+                    metrics.memory_stats.unwrap().used_kb as f64
+                        / metrics.memory_stats.unwrap().total_kb as f64
+                        * 100.0
+                }
                 _ => return Err("Unknown component".into()),
             };
             let comparison_result = match condition.operator.as_str() {
@@ -71,8 +133,10 @@ pub async fn process_notification(
                 _ => return Err("Invalid operator".into()),
             };
 
-            info!("Evaluating condition: {} {} {} -> Result: {}",
-                metric_value, condition.operator, condition.value, comparison_result);
+            info!(
+                "Evaluating condition: {} {} {} -> Result: {}",
+                metric_value, condition.operator, condition.value, comparison_result
+            );
 
             conditions_met = comparison_result;
 
@@ -98,32 +162,51 @@ pub async fn process_notification(
                             to_email: "to@email.com".to_string(),
                             subject: "Notification Alert".to_string(),
                         };
-                        if let Err(e) = NotificationService::Email(email_config).send("Test email message").await {
+                        if let Err(e) = NotificationService::Email(email_config)
+                            .send("Test email message")
+                            .await
+                        {
                             info!("Failed to send email: {}", e);
                         } else {
                             info!("Email sent successfully");
                         }
-                    },
-                    "discord" => {
+                    }
+                    "low" => {
                         let discord_config = DiscordConfig {
-                            webhook_url: "https://discord.com/api/webhooks/1366492231350882324/mXVQevFjJERDaIfZ-GLeIbQY1vXDKZZMkmdoT19vBtmR8mxIxW7UBGgp-eJtj97aTfk8".to_string(),
+                            webhook_url: "https://discord.com/api/webhooks/1397708278192148560/Z81BCG2mju3DNlD-uraLjrnk5wPGwKYvjXCIKXmy8wwy2qbvOtSGFrz9KtkAW85FxSzU".to_string(),
                         };
-                        if let Err(e) = NotificationService::Discord(discord_config).send("Test Discord message").await {
+                        let message = format!(
+                            r##"
+**Low Severity Alert**: A condition has been met that requires attention.
+Rule Name: {}
+Description: {}
+Severity: Low
+                        "##,
+                            rule.name, rule.description
+                        );
+                        if let Err(e) = NotificationService::Discord(discord_config)
+                            .send(&*message)
+                            .await
+                        {
                             info!("Failed to send Discord message: {}", e);
                         } else {
                             info!("Discord message sent successfully");
                         }
-                    },
+                    }
                     "slack" => {
                         let slack_config = SlackConfig {
-                            webhook_url: "https://hooks.slack.com/services/your_webhook_url".to_string(),
+                            webhook_url: "https://hooks.slack.com/services/your_webhook_url"
+                                .to_string(),
                         };
-                        if let Err(e) = NotificationService::Slack(slack_config).send("Test Slack message").await {
+                        if let Err(e) = NotificationService::Slack(slack_config)
+                            .send("Test Slack message")
+                            .await
+                        {
                             info!("Failed to send Slack message: {}", e);
                         } else {
                             info!("Slack message sent successfully");
                         }
-                    },
+                    }
                     _ => info!("Unknown action: {}", action),
                 }
             }
@@ -131,7 +214,6 @@ pub async fn process_notification(
     }
 
     Ok(())
-
 }
 #[derive(Error, Debug)]
 pub enum NotificationError {
@@ -151,7 +233,6 @@ pub enum NotificationService {
     Slack(SlackConfig),
 }
 
-
 pub struct EmailConfig {
     pub smtp_server: String,
     pub smtp_port: u16,
@@ -163,11 +244,11 @@ pub struct EmailConfig {
 }
 
 pub struct DiscordConfig {
-    pub webhook_url: String
+    pub webhook_url: String,
 }
 
 pub struct SlackConfig {
-    pub webhook_url: String
+    pub webhook_url: String,
 }
 
 impl NotificationService {
@@ -221,7 +302,7 @@ fn create_sender(args: &str) -> Option<NotificationService> {
                 to_email,
                 subject,
             }))
-        },
+        }
         "discord" => {
             let mut params = details.split('@');
             let token = params.next()?;
@@ -230,8 +311,8 @@ fn create_sender(args: &str) -> Option<NotificationService> {
             Some(NotificationService::Discord(DiscordConfig {
                 webhook_url: format!("https://discord.com/api/webhooks/{}/{}", webhook_id, token),
             }))
-        },
-        _ => None
+        }
+        _ => None,
     }
 }
 
@@ -243,7 +324,8 @@ fn send_email(config: &EmailConfig, body: &str) -> Result<(), NotificationError>
 async fn send_discord(config: &DiscordConfig, message: &str) -> Result<(), NotificationError> {
     // Implement Discord message sending logic here
     let client = Client::new();
-    let res = client.post(&config.webhook_url)
+    let res = client
+        .post(&config.webhook_url)
         .json(&serde_json::json!({ "content": message }))
         .send()
         .await?;
