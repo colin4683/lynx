@@ -59,167 +59,61 @@
 </script>
 
 
-<div class="w-full px-2 flex flex-col gap-10">
+<div class="w-full px-2 grid grid-cols-1 lg:grid-cols-2 gap-10">
 	<div class="w-full flex flex-col justify-start items-start gap-2">
 		<h1 class="text-lg font-extrabold">Welcome to the lynx dashboard</h1>
 		<p class="text-center align-middle flex items-center gap-1.5">
 			<span class="text-muted-foreground icon-[line-md--account] w-4 h-4"></span>
 			<span class="text-sm text-muted-foreground">{data.user.email}</span>
 		</p>
+		<div class="flex flex-col gap-2 w-1/2">
+			<h3 class="text-md">Available Systems</h3>
+			<div class="flex flex-wrap gap-2 w-full">
+				{#each data.systems as system}
+					<div class="w-full backdrop-blur-[2px] p-3 rounded-md border border-[var(--border)] flex items-center ">
+							<span class="icon-[ix--agent] mr-2 w-5 h-5 text-primary"></span>
+							<div class="flex flex-col gap-1">
+								<div class="flex items-center align-middle">
+										<p class="text-sm font-bold">{system.label ?? system.hostname}</p>
+										<p class="text-sm text-muted-foreground">@</p>
+										<p class="text-sm text-muted-foreground">{system.hostname}</p>
+									</div>
+									<div class="flex items-center gap-2">
+										<span class="text-xs text-muted-foreground">{system.os}</span>
+									</div>
+							</div>
+							<button class="px-2 absolute right-2 py-1 text-xs rounded bg-primary text-white hover:bg-primary/90" onclick={() => {
+								window.location.href = `/systems/${system.id}`;
+							}}>View</button>
+					</div>
+				{/each}
+			</div>
+		</div>
 	</div>
 
+	<div class="w-full flex flex-col gap-1 bg-foreground px-4 py-2 shadow-xl border border-border rounded-lg">
+		<h2 class="text-lg font-semibold">Recent alerts</h2>
+		{#if data.alerts.length > 0}
+			<div class="flex flex-col gap-2">
+				{#each data.alerts as alert, i}
+					<div class="w-full bg-background p-3 rounded-md border border-[var(--border)] flex items-center justify-between">
+						<div class="flex items-center gap-2">
+							<span class="icon-[line-md--alert] w-5 h-5 text-red-500"></span>
+							<p class="text-sm font-bold">{alert.system?.label ?? alert.system?.hostname ?? 'Unknown Agent'}</p>
+							<p class="text-sm">{alert.alertRule.name}</p>
+						</div>
+						<div class="flex items-center gap-2">
+							<p class="text-sm text-muted-foreground">{relativeDate(alert.date)}</p>
+							<button class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 hover:bg-red-200" onclick={() => {
+								data.alerts.splice(i, 1);
 
-	<div class="w-full bg-[var(--background-alt)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
-		<p class="text-xl font-bold font-mono">Lynx Hub - system information</p>
-		{#if data.hub}
-			<div class="flex w-full items-center align-middle gap-4">
-				<div class="flex items-center gap-1">
-					<span class="icon-[solar--home-wifi-bold] w-5 h-5w"></span>
-					<span class="text-sm font-mono">{data.hub.hostname}</span>
-				</div>
-				<div class="w-0.5 h-7 bg-[var(--border)]"></div>
-				<div class="flex items-center gap-1">
-					<span class="icon-[solar--monitor-linear] w-5 h-5"></span>
-					<span class="text-sm font-mono">{data.hub.os}</span>
-				</div>
-				<div class="w-0.5 h-7 bg-[var(--border)]"></div>
-				<div class="flex items-center gap-1">
-					<span class="icon-[solar--clock-circle-broken] w-5 h-5"></span>
-					<span class="text-sm font-mono">{secondsToTime(data.hub.uptime ?? 0)}</span>
-				</div>
-			</div>
-			<div class="w-full flex justify-between gap-2  align-middle items-center">
-				<div
-					class={`max-w-sm w-full bg-[var(--background)] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
-				>
-					<p class="text-lg font-bold flex items-center align-middle gap-1">
-						<span class="icon-[solar--cpu-bolt-linear] w-5 h-5"></span>
-						CPU
-					</p>
-					<p class="text-xs text-muted-foreground">{data.hub.cpu}</p>
-					<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
-						<MiniLineChart
-							config={cpuChartConfig}
-							data={cpuChartData}
-							x="time"
-							y="cpu"
-						/>
-						<p class="">{(data.hub.cpuUsage ?? 0.0).toFixed(2)}%</p>
-					</div>
-				</div>
-				{#if data.hub.memoryTotal && data.hub.memoryUsed}
-					<div
-						class={`max-w-sm w-full bg-[var(--background)] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
-					>
-						<p class="text-lg font-bold flex items-center align-middle gap-1">
-							<span class="icon-[ri--ram-line] w-5 h-5"></span>
-							Memory
-						</p>
-						<p class="text-xs text-muted-foreground">Total: {(data.hub.memoryTotal / 1024 / 1024).toFixed(0)}gb</p>
-						<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
-							<div class="w-full max-w-[150px] border border-[#e21f88]  bg-[var(--foreground)] h-5">
-								<div class={`bg-[#e21f88]/70 border-r border-r-[#e21f88] h-4.5`} style="width: {(data.hub.memoryUsed / data.hub.memoryTotal * 100).toFixed(2)}%"></div>
-							</div>
-							<p class="">{(data.hub.memoryUsed / data.hub.memoryTotal * 100).toFixed(2)}%</p>
+							}}>Dismiss</button>
 						</div>
 					</div>
-				{/if}
-				{#if data.hub.disks[0].used && data.hub.disks[0].space}
-					<div
-						class={`max-w-sm w-full bg-[var(--background)] z-[5] relative border border-border  flex flex-col items-start  py-1 pl-2.5 rounded-xl shadow-md`}
-					>
-						<p class="text-lg font-bold flex items-center align-middle gap-1">
-							<span class="icon-[tdesign--hard-disk-storage-filled]  w-5 h-5"></span>
-							Storage
-						</p>
-						<p class="text-xs text-muted-foreground">Capacity: {(data.hub.disks[0].space).toFixed(0)}{data.hub.disks[0].unit}</p>
-						<div class="w-full flex justify-start items-center align-middle gap-3 py-2">
-							<div class="w-full max-w-[150px] border border-[#5e40ec]  bg-[var(--foreground)] h-5">
-								<div class={`bg-[#5e40ec]/70 border-r border-r-[#5e40ec] h-4.5`} style="width: {(data.hub.disks[0].used / data.hub.disks[0].space * 100).toFixed(2)}%"></div>
-							</div>
-							<p class="">{(data.hub.disks[0].used / data.hub.disks[0].space * 100).toFixed(2)}%</p>
-						</div>
-					</div>
-				{/if}
+				{/each}
 			</div>
+		{:else}
+			<p class="text-sm text-muted-foreground">No recent alerts</p>
 		{/if}
-	</div>
-
-	<div class="flex flex-col gap-2">
-		<h3 class="text-md">Available Systems</h3>
-		<table class="w-full bg-[var(--foreground)]">
-			<thead>
-			<tr>
-				<th>System</th>
-				<th>
-					<span class="icon-[solar--cpu-bolt-linear] w-5 h-5">CPU</span>
-					CPU
-				</th>
-				<th>
-					<span class="icon-[ri--ram-line] w-5 h-5">MEMORY</span>
-					Memory
-				</th>
-				<th>
-					<span class="icon-[mdi--hdd] w-5 h-5">DISK</span>
-					Disk
-				</th>
-				<th>
-					<span class="icon-[fluent--network-check-24-regular] w-5 h-5">NETWORK</span>
-					Net
-				</th>
-				<th>
-					<span class="icon-[lucide--clock] w-5 h-5">UPDATED</span>
-					Updated
-				</th>
-			</tr>
-			</thead>
-			<tbody>
-			{#each data.systems as system}
-				<tr>
-					<td>
-						<div class="flex items-center justify-start gap-2 group  w-full  cursor-pointer" onclick={() => window.open(`/systems/${system.id}`, '_self')}>
-							<span class={`w-2 h-2 rounded-full ${system.active ? 'bg-green-300' : 'bg-red-400'}`}></span>
-							<p class="font-bold group-hover:text-[var(--primary)]">{system.label}</p>
-							<span class="icon-[cuida--open-in-new-tab-outline] w-3.5 h-3.5 group-hover:text-[var(--primary)]">open</span>
-						</div>
-					</td>
-					<td>
-						{#if system.cpuUsage}
-							<div class="flex align-middle items-center gap-2 px-3">
-								<p class="text-sm">{(system.cpuUsage).toFixed(2)}%</p>
-								<ProgressBar min={0} max={1} value={system.cpuUsage / 100} type="cpu" />
-							</div>
-						{/if}
-					</td>
-					<td>
-						{#if system.memoryTotal && system.memoryUsed}
-							<div class="flex align-middle items-center gap-2 px-3">
-								<p class="text-sm">{((system.memoryUsed / system.memoryTotal)* 100).toFixed(2)}%</p>
-								<ProgressBar min={0} max={1} value={(system.memoryUsed / system.memoryTotal)} type="memory" />
-							</div>
-						{/if}
-					</td>
-					<td>
-						{#if system.disks[0].used && system.disks[0].space && system.disks[0].time}
-							<div class="flex align-middle items-center gap-2 px-3">
-								<p class="text-sm">{((system.disks[0].used / system.disks[0].space)* 100).toFixed(2)}%</p>
-								<ProgressBar min={0} max={1} value={system.disks[0].used / system.disks[0].space} type="disk" />
-							</div>
-						{/if}
-					</td>
-					<td>
-						<p class="text-sm text-left">
-							{system.metrics[0].netIn ? (system.metrics[0].netIn / 1024).toFixed(2) : 0}mb/s
-						</p>
-					</td>
-					<td>
-						<p class="text-sm text-left">
-							{relativeDate(system.metrics[0].time)}
-						</p>
-					</td>
-				</tr>
-			{/each}
-			</tbody>
-		</table>
 	</div>
 </div>

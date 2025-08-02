@@ -25,7 +25,26 @@ export async function load(event: PageServerLoadEvent) {
 	if (!event.locals.session.twoFactorVerified) {
 		return redirect(302, "/2fa");
 	}
+
+	// get alert_history for systems where system.admin is current user id
+	// alert_history has (
+	const systemIds = await db.query.systems.findMany({
+		where: (systems, { eq }) => eq(systems.admin, event.locals.user!.id),
+		columns: { id: true }
+	});
+
+	const ids = systemIds.map(s => s.id);
+	const alertHistory = await db.query.alertHistory.findMany({
+		where: (alertHistory, { inArray }) => inArray(alertHistory.system, ids),
+		orderBy: (alertHistory, { desc }) => desc(alertHistory.date),
+		with: {
+			system: true,
+			alertRule: true
+		},
+	});
+
 	return {
-		user: event.locals.user
+		user: event.locals.user,
+		alerts: alertHistory
 	};
 }

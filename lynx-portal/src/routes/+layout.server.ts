@@ -41,6 +41,6 @@ export async function load(event: LayoutServerLoadEvent) {
 		systems: data,
 		metrics: metrics,
 		hub: hub || null,
-		user: event.locals.user
+		user: event.locals.user,
 	};
 };
