@@ -31,7 +31,9 @@
 	{#each rules as rule}
 		<Card.Root class="relative bg-[var(--foreground)] p-4 rounded-lg shadow-md gap-1">
 			<Card.Header class="bg-background rounded-lg border border-border items-center align-middle flex px-2 justify-between">
-				<Card.Title class="text-lg font-semibold border-border">{rule.name}</Card.Title>
+				<Card.Title class="text-lg font-semibold border-border cursor-pointer hover:text-primary transition-colors" onclick={() => {
+					window.location.href = `/alerts/edit/${rule.id}`;
+				}}>{rule.name}</Card.Title>
 				<Switch  class="" checked={rule.active ?? false} />
 			</Card.Header>
 			<Card.Content>

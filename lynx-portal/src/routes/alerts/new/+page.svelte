@@ -172,16 +172,35 @@
 						</span>
 						</Select.Trigger>
 						<Select.Content class="bg-[var(--background)] rounded-md border border-[var(--border)]">
-							<Select.Item value="metric">Metric Name</Select.Item>
-							<Select.Item value="cpu">CPU Usage (%)</Select.Item>
-							<Select.Item value="memory">Memory Usage (%)</Select.Item>
-							<Select.Item value="l1">Load 1</Select.Item>
-							<Select.Item value="l5">Load 5</Select.Item>
-							<Select.Item value="l15">Load 15</Select.Item>
-							<Select.Item value="disk">Disk Usage (%)</Select.Item>
-							<Select.Item value="in">  In (mb/s)</Select.Item>
-							<Select.Item value="out">Network Out (mb/s)</Select.Item>
-							<Select.Item value="temp">Temperature (°C)</Select.Item>
+							<Select.Group>
+								<Select.Label>CPU</Select.Label>
+								<Select.Item value="cpu.usage">CPU Usage (%)</Select.Item>
+							</Select.Group>
+							<Select.Group>
+								<Select.Label>Loads</Select.Label>
+								<Select.Item value="load.one">Load 1</Select.Item>
+								<Select.Item value="load.five">Load 5</Select.Item>
+								<Select.Item value="load.fifteen">Load 15</Select.Item>
+							</Select.Group>
+							<Select.Group>
+								<Select.Label>Memory</Select.Label>
+								<Select.Item value="memory.usage">Memory Usage (%)</Select.Item>
+							</Select.Group>
+							<Select.Group>
+								<Select.Label>Network</Select.Label>
+								<Select.Item value="network.in">Network In (mb/s)</Select.Item>
+								<Select.Item value="network.out">Network Out (mb/s)</Select.Item>
+							</Select.Group>
+							<Select.Group>
+								<Select.Label>Disk</Select.Label>
+								<Select.Item value="disk.usage">Disk Usage (%)</Select.Item>
+								<Select.Item value="disk.read">Disk Read (mb/s)</Select.Item>
+								<Select.Item value="disk.write">Disk Write (mb/s)</Select.Item>
+							</Select.Group>
+							<Select.Group>
+								<Select.Label>Temperature</Select.Label>
+								<Select.Item value="temp">Temperature (°C)</Select.Item>
+							</Select.Group>
 						</Select.Content>
 					</Select.Root>
 

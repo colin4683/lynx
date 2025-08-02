@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""
+Enhanced Isolation Forest training script with ONNX export
+- Used for training an Isolation Forest model on system metrics to detect anomalies
+  and predict system health issues.
+"""
+
+import json
+import logging
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report
+from pathlib import Path
+from typing import Tuple, Dict, List, Optional
+import argparse
+from datetime import datetime
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Default configuration
+DEFAULT_CONFIG = {
+    "input_csv": "system_metrics.csv",
+    "output_dir": "model_assets",
+    "contamination": 0.1,
+    "n_estimators": 100,
+    "random_state": 42,
+    "max_samples": "auto",
+    "features": [
+        "cpu_usage",
+        "memory_usage",
+        "net_in",
+        "net_out",
+        "load_one",
+    ],
+    "memory_usage_ratio": True,
+    "drop_columns": [
+        "time",
+        "uptime",
+        "docker_containers_running",
+        "system_id",
+        "components",
+        "ctid",
+        "load_fifteen",
+        "load_five"
+    ],
+    "onnx_opset": 15,
+    "ai_onnx_ml_opset": 3,
+    "validation_split": 0.2,
+    "min_samples": 100
+}
+
+
+class DataValidationError(Exception):
+    """Custom exception for data validation errors"""
+    pass
+
+
+def validate_data(df: pd.DataFrame, config: Dict) -> None:
+    """Validate input data before processing"""
+    if df.empty:
+        raise DataValidationError("Input dataframe is empty")
+
+    if len(df) < config.get("min_samples", 100):
+        raise DataValidationError(
+            f"Insufficient samples: {len(df)} < {config.get('min_samples', 100)}"
+        )
+
+    # Check for required columns
+    if config["memory_usage_ratio"]:
+        required_cols = ["memory_used_kb", "memory_total_kb"]
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise DataValidationError(f"Missing required columns: {missing_cols}")
+
+    # Check for features after preprocessing
+    missing_features = [f for f in config["features"] if f not in df.columns
+                        and f != "memory_usage"]
+    if missing_features and not config["memory_usage_ratio"]:
+        raise DataValidationError(f"Missing features: {missing_features}")
+
+
+def load_data(filepath: str, config: Dict) -> Tuple[np.ndarray, StandardScaler, List[str]]:
+    """Load and preprocess system metrics with validation"""
+    try:
+        df = pd.read_csv(filepath)
+        logger.info(f"Loaded {len(df)} rows from {filepath}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {filepath}")
+    except pd.errors.EmptyDataError:
+        raise DataValidationError("Input CSV file is empty")
+
+    # Validate data
+    validate_data(df, config)
+
+    # Drop unused columns
+    columns_to_drop = [col for col in config["drop_columns"] if col in df.columns]
+    df = df.drop(columns=columns_to_drop)
+    logger.info(f"Dropped columns: {columns_to_drop}")
+
+    # Calculate memory usage percentage
+    if config["memory_usage_ratio"]:
+        if "memory_used_kb" in df.columns and "memory_total_kb" in df.columns:
+            # Handle division by zero
+            df["memory_usage"] = np.where(
+                df["memory_total_kb"] > 0,
+                (df["memory_used_kb"] / df["memory_total_kb"]) * 100,
+                0
+            )
+            df = df.drop(columns=["memory_used_kb", "memory_total_kb"])
+            logger.info("Calculated memory usage percentage")
+
+    # Save preprocessed data for debugging
+    debug_path = Path(config["output_dir"]) / "preprocessed_data.csv"
+    debug_path.parent.mkdir(exist_ok=True)
+    df.to_csv(debug_path, index=False)
+
+    # Select features and handle missing values
+    feature_cols = [f for f in config["features"] if f in df.columns]
+    if len(feature_cols) != len(config["features"]):
+        missing = set(config["features"]) - set(feature_cols)
+        logger.warning(f"Missing features: {missing}")
+
+    X = df[feature_cols].values
+
+    # Handle missing values
+    if np.isnan(X).any():
+        logger.warning("Found NaN values in features, filling with median")
+        X = pd.DataFrame(X, columns=feature_cols).fillna(
+            pd.DataFrame(X, columns=feature_cols).median()
+        ).values
+
+    # Normalize features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    return X_scaled, scaler, feature_cols
+
+
+def evaluate_model(model: IsolationForest, X: np.ndarray,
+                   contamination: float) -> Dict:
+    """Evaluate model performance"""
+    predictions = model.predict(X)
+    anomaly_scores = model.score_samples(X)
+
+    n_anomalies = (predictions == -1).sum()
+    anomaly_ratio = n_anomalies / len(predictions)
+
+    metrics = {
+        "n_samples": len(X),
+        "n_anomalies_detected": int(n_anomalies),
+        "anomaly_ratio": float(anomaly_ratio),
+        "expected_contamination": contamination,
+        "score_threshold": float(model.offset_),
+        "mean_anomaly_score": float(anomaly_scores.mean()),
+        "std_anomaly_score": float(anomaly_scores.std()),
+        "min_anomaly_score": float(anomaly_scores.min()),
+        "max_anomaly_score": float(anomaly_scores.max())
+    }
+
+    return metrics
+
+
+def train_model(X: np.ndarray, config: Dict) -> IsolationForest:
+    """Train Isolation Forest model with validation"""
+    model = IsolationForest(
+        n_estimators=config['n_estimators'],
+        contamination=config['contamination'],
+        random_state=config['random_state'],
+        max_samples=config.get('max_samples', 'auto'),
+        verbose=1,
+        n_jobs=-1
+    )
+
+    # Split data for validation if specified
+    if config.get("validation_split", 0) > 0:
+        X_train, X_val = train_test_split(
+            X,
+            test_size=config["validation_split"],
+            random_state=config["random_state"]
+        )
+        logger.info(f"Training on {len(X_train)} samples, validating on {len(X_val)}")
+        model.fit(X_train)
+
+        # Evaluate on validation set
+        val_metrics = evaluate_model(model, X_val, config['contamination'])
+        logger.info(f"Validation metrics: {val_metrics}")
+    else:
+        model.fit(X)
+
+    return model
+
+
+def export_model(model: IsolationForest, scaler: StandardScaler,
+                 feature_names: List[str], output_dir: str,
+                 config: Dict, metrics: Dict) -> None:
+    """Export model with metadata and error handling"""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Save metadata
+    metadata = {
+        "features": feature_names,
+        "config": config,
+        "metrics": metrics,
+        "training_date": datetime.now().isoformat(),
+        "model_version": "1.0.0"
+    }
+
+    with open(output_path / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    # Export ONNX model
+    try:
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType
+
+        initial_type = [('float_input', FloatTensorType([None, len(feature_names)]))]
+        onx = convert_sklearn(
+            model,
+            initial_types=initial_type,
+            target_opset={
+                '': config["onnx_opset"],
+                'ai.onnx.ml': config["ai_onnx_ml_opset"]
+            }
+        )
+
+        with open(output_path / "model.onnx", "wb") as f:
+            f.write(onx.SerializeToString())
+        logger.info("ONNX model exported successfully")
+    except ImportError:
+        logger.warning("skl2onnx not installed, skipping ONNX export")
+    except Exception as e:
+        logger.error(f"Failed to export ONNX model: {e}")
+
+    # Export scaler parameters
+    scaler_params = {
+        "mean": scaler.mean_.tolist(),
+        "scale": scaler.scale_.tolist(),
+        "feature_names": feature_names,
+        "n_features": len(feature_names)
+    }
+    with open(output_path / "scaler.json", "w") as f:
+        json.dump(scaler_params, f, indent=2)
+
+    # Export with joblib
+    model_bundle = {
+        "model": model,
+        "scaler": scaler,
+        "features": feature_names,
+        "metadata": metadata
+    }
+    joblib.dump(model_bundle, output_path / "model.joblib")
+
+    logger.info(f"Model successfully exported to {output_dir}")
+
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Train Isolation Forest model for anomaly detection"
+    )
+    parser.add_argument(
+        "--input", "-i",
+        default=DEFAULT_CONFIG["input_csv"],
+        help="Input CSV file path"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        default=DEFAULT_CONFIG["output_dir"],
+        help="Output directory for model assets"
+    )
+    parser.add_argument(
+        "--contamination", "-c",
+        type=float,
+        default=DEFAULT_CONFIG["contamination"],
+        help="Expected proportion of anomalies"
+    )
+    parser.add_argument(
+        "--config", "-f",
+        help="Path to JSON config file (overrides defaults)"
+    )
+    return parser.parse_args()
+
+
+def load_config(args) -> Dict:
+    """Load configuration from file or command line"""
+    config = DEFAULT_CONFIG.copy()
+
+    # Load from config file if provided
+    if args.config:
+        try:
+            with open(args.config, 'r') as f:
+                file_config = json.load(f)
+                config.update(file_config)
+                logger.info(f"Loaded config from {args.config}")
+        except Exception as e:
+            logger.error(f"Failed to load config file: {e}")
+            raise
+
+    # Override with command line arguments
+    config["input_csv"] = args.input
+    config["output_dir"] = args.output
+    config["contamination"] = args.contamination
+
+    return config
+
+
+def main():
+    """Main training pipeline with error handling"""
+    args = parse_arguments()
+
+    try:
+        # Load configuration
+        config = load_config(args)
+
+        logger.info("Starting Isolation Forest training")
+        logger.info(f"Configuration: {json.dumps(config, indent=2)}")
+
+        # Load and preprocess data
+        logger.info("Loading training data...")
+        X, scaler, feature_names = load_data(config['input_csv'], config)
+        logger.info(f"Using features: {feature_names}")
+        logger.info(f"Data shape: {X.shape}")
+
+        # Train model
+        logger.info("Training model...")
+        model = train_model(X, config)
+
+        # Evaluate model
+        logger.info("Evaluating model...")
+        metrics = evaluate_model(model, X, config['contamination'])
+        logger.info(f"Training metrics: {json.dumps(metrics, indent=2)}")
+
+        # Export model
+        logger.info("Exporting model...")
+        export_model(model, scaler, feature_names, config['output_dir'],
+                     config, metrics)
+
+        logger.info("Training complete!")
+        logger.info(f"Model can detect anomalies in: {feature_names}")
+        logger.info(f"Anomaly threshold: {model.offset_:.4f}")
+        logger.info(f"Detected {metrics['n_anomalies_detected']} anomalies "
+                    f"({metrics['anomaly_ratio']:.2%}) in training data")
+
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()
