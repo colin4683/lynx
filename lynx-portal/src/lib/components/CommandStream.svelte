@@ -1,18 +1,22 @@
 <script lang="ts">
 	import * as Dialog from "$lib/components/ui/dialog/index.js";
-	import { Button, buttonVariants } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input/index.js';
 	import { onDestroy } from 'svelte';
+	import { DialogHeader, DialogTitle } from '$lib/components/ui/dialog/index.js';
+	import { fly, fade } from 'svelte/transition';
+	import { tick } from 'svelte';
 
 	let command = $state('');
 	let output = $state<string[]>([]);
 	let executing = $state(false);
 	let scrollContainer: HTMLDivElement | null = null;
 	let socket: WebSocket | null = null;
+	let inputValue = $state('');
+	let inputRef: HTMLInputElement | null = null;
+
 	function executeCommand() {
 		if (!command.trim()) return;
 
-		output = [`$ ${command}`];
+		output = [...output, `$ ${command}`];
 		executing = true;
 
 		if (socket) socket.close();
@@ -43,6 +47,13 @@
 		socket.onmessage = (event) => {
 			// data is just raw text
 			const data = event.data;
+			let displayData: string;
+			try {
+				const parsed = JSON.parse(data);
+				displayData = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2) : String(parsed);
+			} catch {
+				displayData = String(data);
+			}
 			if (data === 'EOF') {
 				executing = false;
 				socket?.send(JSON.stringify({ type: 'stop' }));
@@ -50,6 +61,7 @@
 					socket?.close()
 				}, 500);
 			} else {
+				console.log('Received data:', data);
 				output = [...output, data];
 			}
 		}
@@ -82,7 +94,38 @@
 		}
 	});
 
+	async function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && !executing) {
+			command = inputValue;
+			executeCommand();
+			inputValue = '';
+			await tick();
+			scrollToBottom();
+		} else if (e.key === 'c' && e.ctrlKey && executing) {
+			stopCommand();
+			output = [...output, '^C'];
+			executing = false;
+			await tick();
+			scrollToBottom();
+		} else if (e.key === 'l' && e.ctrlKey) {
+			e.preventDefault();
+			output = [];
+			command = '';
+		} else if (e.key === 'Escape' || (e.key === 'd' && e.ctrlKey)) {
+			e.preventDefault();
+			destroy();
+		}
+	}
 
+	function scrollToBottom() {
+		if (scrollContainer) {
+			scrollContainer.scrollTop = scrollContainer.scrollHeight;
+		}
+	}
+
+	$effect(() => {
+		if (inputRef) inputRef.focus();
+	});
 
 	onDestroy(() => {
 		destroy();
@@ -101,34 +144,36 @@
 	</Dialog.Trigger
 	>
 
-	<Dialog.Content class="sm:max-w-2xl border-border">
-		<Dialog.Header>
+	<Dialog.Content class="sm:max-w-6xl h-[60%] bg-background flex flex-col border-border">
+		<DialogHeader>
 			<Dialog.Title>Command Stream</Dialog.Title>
 			<Dialog.Description>
 				Stream output of command from agent
 			</Dialog.Description>
-		</Dialog.Header>
+		</DialogHeader>
 
-		<div class="w-full flex flex-col items-start gap-2">
-			<div class="flex items-center align-middle gap-1.5">
-				<Input bind:value={command} type="text" placeholder="command to stream" class="outline-none active:outline-none focus:outline-none focus:ring-0 ring-0  active:ring-0" />
-				<Button onclick={() => executeCommand()} disabled={executing} variant="outline">{executing ? 'Running...' : 'Execute'}</Button>
-				<Button onclick={() => stopCommand()} disabled={!executing} variant="destructive">Stop</Button>
-			</div>
-
+		<div class="w-full h-full flex flex-col items-start justify-start gap-2 pb-2">
 			<div
 				bind:this={scrollContainer}
-				class="w-full min-h-[300px] max-h-[300px] overflow-auto scroll-auto font-mono text-sm overscroll-auto bg-foreground border border-border p-2">
-				{#if output.length === 0}
-					<div class="text-muted-foreground">Output will appear here...</div>
-				{:else}
-					{#each output as line}
-						<div>{line}</div>
-					{/each}
-					{#if executing}
-						<div class="animate-pulse">█</div>
-					{/if}
+				class="w-full h-full overflow-scroll font-mono text-sm overscroll-auto bg-foreground border border-border p-2 rounded transition-all duration-300">
+				{#each output as line}
+					<div in:fly={{ y: 10, duration: 50 }} out:fade={{duration: 100}}>{line}</div>
+				{/each}
+				{#if executing}
+					<div class="animate-pulse">█</div>
 				{/if}
+				<!-- Terminal prompt -->
+				<div class="flex items-center w-full mt-2">
+					<span class="text-primary font-bold select-none">$</span>
+					<input
+						bind:this={inputRef}
+						bind:value={inputValue}
+						class="bg-transparent border-none outline-none text-white font-mono w-full ml-2 animate-in fade-in {executing ? 'opacity-60 cursor-not-allowed' : ''}"
+						placeholder="Type a command and press Enter..."
+						readonly={executing}
+						onkeydown={handleKeydown}
+					/>
+				</div>
 			</div>
 		</div>
 	</Dialog.Content>
