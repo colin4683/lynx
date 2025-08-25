@@ -1,17 +1,15 @@
+use crate::lib::cache::FastCache;
 use crate::proto::monitor::{
     Component, CpuStats, DiskStats, LoadAverage, MemoryStats, MetricsRequest, NetworkStats,
-    SystemInfoRequest,
+    SystemInfoRequest, SystemctlRequest,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use std::str::FromStr;
-use sysinfo::{
-    Components, DiskKind, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, Uid,
-    Users,
-};
+use sysinfo::{Components, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use systemctl::ActiveState;
 #[cfg(not(target_os = "windows"))]
 use systemstat::Platform;
-use tokio::time::Instant;
 
 macro_rules! to_kb {
     ($x:expr) => {
@@ -22,7 +20,8 @@ macro_rules! to_mb {
     ($x:expr) => {
         $x / 1024 / 1024
     };
-}macro_rules! to_gb {
+}
+macro_rules! to_gb {
     ($x:expr) => {
         $x / 1024 / 1024 / 1024
     };
@@ -87,6 +86,72 @@ pub async fn collect_system_info(system: &mut System) -> SystemInfoRequest {
     }
 }
 
+pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
+    let systemctl = systemctl::SystemCtl::default();
+    let units = systemctl.list_units_full(Some("service"), None, None);
+    let mut changed_services = vec![];
+
+    match units {
+        Ok(units) => {
+            for unit in units {
+                // Get current active state and other info
+                let active_state = systemctl
+                    .get_active_state(&unit.unit_name)
+                    .unwrap_or(ActiveState::Unknown);
+                let properties = systemctl.create_unit(&unit.unit_name).unwrap_or_default();
+                let pid = properties.pid;
+                let description = properties.description;
+                let enabled = active_state == ActiveState::Active;
+                let cpu = properties.cpu;
+                // Build SystemService struct
+                let service = crate::lib::cache::SystemService {
+                    name: unit.unit_name.clone(),
+                    status: format!("{:?}", active_state),
+                    enabled,
+                    description,
+                    pid,
+                    cpu_usage: cpu,
+                };
+                // Check cache
+                let cached = cache
+                    .get_system_service(&unit.unit_name)
+                    .await
+                    .unwrap_or(None);
+                let cached_ref = cached.as_ref();
+                if cached.is_none() || cached.as_ref() != Some(&service) {
+                    // Update cache if changed or not present
+                    let _ = cache
+                        .set_system_service(&service, Some(chrono::Duration::minutes(10)))
+                        .await;
+                    changed_services.push(unit.clone());
+                }
+            }
+        }
+        Err(e) => {
+            println!("Failed to list systemctl units: {}", e);
+        }
+    }
+
+    let services = changed_services
+        .into_iter()
+        .map(|unit| crate::proto::monitor::SystemService {
+            service_name: unit.unit_name.clone(),
+            description: unit.description,
+            state: format!("{:?}", unit.active),
+            pid: systemctl
+                .create_unit(&unit.unit_name.clone())
+                .ok()
+                .and_then(|p| p.pid)
+                .unwrap_or(0),
+            cpu: systemctl
+                .create_unit(&unit.unit_name.clone())
+                .ok()
+                .and_then(|p| p.cpu)
+                .unwrap_or("unknown".to_string()),
+        })
+        .collect();
+    SystemctlRequest { services }
+}
 fn collect_cpu_stats(system: &System) -> CpuStats {
     let cpu_usage = system
         .cpus()
@@ -160,7 +225,6 @@ fn collect_load_average(_system: &System) -> LoadAverage {
     }
 }
 
-
 fn collect_load_average(system: &System) -> LoadAverage {
     let load = System::load_average();
     LoadAverage {
@@ -170,14 +234,15 @@ fn collect_load_average(system: &System) -> LoadAverage {
     }
 }
 
-
 async fn collect_network_stats() -> NetworkStats {
     let get_network_totals = |networks: &sysinfo::Networks| {
-        networks.values().fold((0, 0), |(mut in_acc, mut out_acc), net| {
-            in_acc += net.total_received();
-            out_acc += net.total_transmitted();
-            (in_acc, out_acc)
-        })
+        networks
+            .values()
+            .fold((0, 0), |(mut in_acc, mut out_acc), net| {
+                in_acc += net.total_received();
+                out_acc += net.total_transmitted();
+                (in_acc, out_acc)
+            })
     };
     let (net_in, net_out) = get_network_totals(&Networks::new_with_refreshed_list());
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

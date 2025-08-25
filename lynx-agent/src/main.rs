@@ -1,21 +1,21 @@
 mod lib;
 mod proto;
+use crate::lib::websocket::PeerMap;
 use dotenv::dotenv;
-use env_logger::{Env};
-use futures_channel::mpsc::{UnboundedSender};
+use env_logger::Env;
+use futures_channel::mpsc::UnboundedSender;
 use log::{error, info};
 use proto::monitor::system_monitor_client::SystemMonitorClient;
-use serde::{Deserialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tonic::Status;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
-use crate::lib::websocket::PeerMap;
+use tonic::Status;
 
 type Tx = UnboundedSender<Message>;
 
@@ -86,22 +86,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start collectors with async mpsc
     let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(32);
 
+    let mut handles = vec![];
+
+    // System info collector (cpu model, users, kernal, os,etc.)
     info!("[agent] Starting sysinfo collector...");
     let sysinfo_handle = tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
+    handles.push(sysinfo_handle);
 
+    // Metric collector (cpu usage, memory usage, disk usage, etc.)
     info!("[agent] Starting metric collector...");
     let metric_handle = tokio::spawn(lib::collectors::metric_collector(tx.clone()));
+    handles.push(metric_handle);
 
+    // Systemctl collector (Linux only - get systemd services status)
+    let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
+    #[cfg(target_os = "linux")]
+    {
+        info!("[agent] Starting systemctl collector...");
+        let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(
+            tx.clone(),
+            cache.clone(),
+        ));
+        handles.push(systemctl_handle);
+    }
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
-    // start websocket server
+    // WebSocket server for real-time updates
     let peers = state.clone();
     let websocket_handle = tokio::spawn(async move {
         let _ = lib::websocket::start_websocket_server(peers).await;
     });
-
-    // Store handles in a vector for easy polling
-    let mut handles = vec![sysinfo_handle, metric_handle, websocket_handle];
+    handles.push(websocket_handle);
 
     loop {
         // Check if any tasks have finished or panicked
@@ -154,6 +169,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             Err(e) => {
                                 error!("[agent] Error sending metrics to hub: {}", e);
+                            }
+                        }
+                    }
+                    lib::collectors::CollectorRequest::sysctl(systemctl) => {
+                        info!("[agent] Sending systemctl services to the hub");
+                        let request = tonic::Request::new(systemctl);
+                        match client.report_systemctl(request).await {
+                            Ok(response) => {
+                                let resp = response.into_inner();
+                                if resp.status == "200" {
+                                    info!("[agent] Successfully sent systemctl services to hub");
+                                } else {
+                                    info!(
+                                        "[agent] Failed to send systemctl services to hub: {:?}",
+                                        resp.message
+                                    )
+                                }
+                            }
+                            Err(e) => {
+                                error!("[agent] Error sending systemctl services to hub: {}", e);
                             }
                         }
                     }

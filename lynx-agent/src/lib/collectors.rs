@@ -1,14 +1,17 @@
-use tokio::sync::mpsc;
-use std::time::Duration;
-use log::info;
-use sysinfo::{System, MINIMUM_CPU_UPDATE_INTERVAL};
-use tokio::time::Instant;
 use crate::lib;
-use crate::proto::monitor::{MetricsRequest, SystemInfoRequest};
+use crate::lib::cache::FastCache;
+use crate::proto::monitor::{MetricsRequest, SystemInfoRequest, SystemctlRequest};
+use log::info;
+use std::sync::Arc;
+use std::time::Duration;
+use sysinfo::{System, MINIMUM_CPU_UPDATE_INTERVAL};
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 pub enum CollectorRequest {
     metrics(MetricsRequest),
-    sysinfo(SystemInfoRequest)
+    sysinfo(SystemInfoRequest),
+    sysctl(SystemctlRequest),
 }
 
 pub async fn metric_collector(mut tx: mpsc::Sender<CollectorRequest>) {
@@ -41,6 +44,22 @@ pub async fn sysinfo_collector(mut tx: mpsc::Sender<CollectorRequest>) {
         info!("[sysinfo] Collection complete [{:.2?}]", elapsed);
         if let Err(e) = tx.send(CollectorRequest::sysinfo(system_info)).await {
             info!("[sysinfo] Failed to send system info: {}", e);
+            break;
+        }
+    }
+}
+
+pub async fn systemctl_collector(mut tx: mpsc::Sender<CollectorRequest>, cache: Arc<FastCache>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    info!("[agent] Systemctl collector started, collecting every 10 minutes...");
+    loop {
+        let now = Instant::now();
+        interval.tick().await;
+        let system_info = lib::system_info::collect_systemctl_services(&cache).await;
+        let elapsed = now.elapsed();
+        info!("[systemctl] Collection complete [{:.2?}]", elapsed);
+        if let Err(e) = tx.send(CollectorRequest::sysctl(system_info)).await {
+            info!("[systemctl] Failed to send systemctl info: {}", e);
             break;
         }
     }

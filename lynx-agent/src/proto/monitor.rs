@@ -29,6 +29,31 @@ pub struct MetricsRequest {
     #[prost(message, optional, tag = "13")]
     pub load_average: ::core::option::Option<LoadAverage>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemctlRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub services: ::prost::alloc::vec::Vec<SystemService>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemService {
+    #[prost(string, tag = "1")]
+    pub service_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub description: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub pid: u64,
+    #[prost(string, tag = "4")]
+    pub state: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub cpu: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemctlResponse {
+    #[prost(string, tag = "1")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct CpuStats {
     #[prost(double, tag = "1")]
@@ -234,6 +259,30 @@ pub mod system_monitor_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "GetSystemInfo"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn report_systemctl(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SystemctlRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::SystemctlResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/ReportSystemctl",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportSystemctl"));
             self.inner.unary(req, path, codec).await
         }
     }
