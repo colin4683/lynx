@@ -5,6 +5,7 @@ package monitor;
 service SystemMonitor {
     rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
     rpc GetSystemInfo (SystemInfoRequest) returns (SystemInfoResponse);
+    rpc ReportSystemctl (SystemctlRequest) returns (SystemctlResponse);
 }
 
 message SystemInfoRequest {
@@ -23,6 +24,21 @@ message MetricsRequest {
     repeated Component components = 11;
     NetworkStats network_stats = 12;
     LoadAverage load_average = 13;
+}
+message SystemctlRequest {
+    repeated SystemService services = 1;
+}
+message SystemService {
+    string service_name = 1;
+    string description = 2;
+    uint64 pid = 3;
+    string state = 4;
+    string cpu = 5;
+}
+
+message SystemctlResponse {
+    string status = 1;
+    string message = 2;
 }
 
 message CpuStats {
