@@ -14,3 +14,4 @@ lynx-core/.env
 lynx-agent/.env
 
 certs/
+*.db
