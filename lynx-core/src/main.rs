@@ -1,21 +1,24 @@
-use std::fs;
 use crate::proto::monitor::system_monitor_server::{SystemMonitor, SystemMonitorServer};
-use crate::proto::monitor::{MetricsRequest, MetricsResponse, SystemInfoRequest, SystemInfoResponse};
+use crate::proto::monitor::{
+    MetricsRequest, MetricsResponse, SystemInfoRequest, SystemInfoResponse, SystemctlRequest,
+    SystemctlResponse,
+};
 use axum::extract::State;
 use axum::response::Html;
-use axum::{Router, ServiceExt, routing::get};
+use axum::{routing::get, Router, ServiceExt};
 use axum_htmx::HxBoosted;
 use chrono::Utc;
+use env_logger::Env;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
+use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use env_logger::Env;
-use log::{error, info};
 use tokio::net::TcpListener;
-use tonic::transport::server::{ServerTlsConfig};
+use tonic::transport::server::ServerTlsConfig;
 use tonic::{Request, Response, Status};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -141,7 +144,6 @@ impl SystemMonitor for MyMonitor {
             error!("[hub] Invalid system for agent key: {:?}", agent_key);
             return Err(Status::unauthenticated("Invalid or inactive agent key"));
         }
-        
 
         let system = valid.unwrap();
         let metrics = request.into_inner();
@@ -150,11 +152,13 @@ impl SystemMonitor for MyMonitor {
         let metrics_thread = metrics.clone();
         let pool_clone = self.pool.clone();
         tokio::spawn(async move {
-            if let Err(e) = lib::notify::process_notification(&metrics_thread, system.id, &pool_clone).await {
+            if let Err(e) =
+                lib::notify::process_notification(&metrics_thread, system.id, &pool_clone).await
+            {
                 error!("[hub] Failed to process notification rules: {}", e);
             }
         });
-        
+
         let components = metrics
             .components
             .iter()
@@ -163,15 +167,14 @@ impl SystemMonitor for MyMonitor {
                 temperature: c.temperature,
             })
             .collect::<Vec<_>>();
-        let components_json = serde_json::to_string(&components)
-            .map_err(|e| {
-                error!("[hub] Failed to serialize component list: {}", e);
-                Status::internal("Serialization error")
-            })?;
-        
+        let components_json = serde_json::to_string(&components).map_err(|e| {
+            error!("[hub] Failed to serialize component list: {}", e);
+            Status::internal("Serialization error")
+        })?;
+
         let network_stats = metrics.network_stats.unwrap();
         let loads = metrics.load_average.unwrap(); // hehe... load
-        
+
         sqlx::query!(
             r#"
             INSERT INTO metrics (time, system_id, cpu_usage, memory_used_kb, memory_total_kb, components, net_in, net_out, load_one, load_five, load_fifteen)
@@ -220,24 +223,24 @@ impl SystemMonitor for MyMonitor {
             .collect::<Vec<_>>();
 
         for disk_query in disks {
-            disk_query
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to insert disk: {e:?}");
-                    Status::internal("Database error")
-                })?;
+            disk_query.execute(&self.pool).await.map_err(|e| {
+                error!("[hub] Failed to insert disk: {e:?}");
+                Status::internal("Database error")
+            })?;
         }
 
         info!("[hub] Metric log successfully saved");
-        
+
         Ok(Response::new(MetricsResponse {
             status: "200".to_string(),
             message: "Metrics reported successfully".to_string(),
         }))
     }
 
-    async fn get_system_info(&self, request: Request<SystemInfoRequest>) -> Result<Response<SystemInfoResponse>, Status> {
+    async fn get_system_info(
+        &self,
+        request: Request<SystemInfoRequest>,
+    ) -> Result<Response<SystemInfoResponse>, Status> {
         info!("[hub] New system info request");
         let agent_key = request
             .metadata()
@@ -253,13 +256,13 @@ impl SystemMonitor for MyMonitor {
             r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
             agent_key
         )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-                Status::internal(format!("Database error: {}", e))
-            })?;
-        
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
+            Status::internal(format!("Database error: {}", e))
+        })?;
+
         if valid.is_none() {
             error!("[hub] No system info found for agent key: {:?}", agent_key);
             return Err(Status::unauthenticated("Invalid or inactive agent key"));
@@ -267,7 +270,7 @@ impl SystemMonitor for MyMonitor {
 
         let system = valid.unwrap();
         let system_request = request.into_inner();
-        
+
         sqlx::query!(
             r#"
             UPDATE systems 
@@ -286,25 +289,125 @@ impl SystemMonitor for MyMonitor {
             system_request.cpu_model,
             system_request.cpu_count as i32,
             system.id
-        ).execute(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to update system info: {:?}", e);
-                Status::internal(format!("Database error: {}", e))
-            })?;
-        
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Failed to update system info: {:?}", e);
+            Status::internal(format!("Database error: {}", e))
+        })?;
+
         info!("[hub] System info updated successfully");
-        
-        
+
         Ok(Response::new(SystemInfoResponse {
             status: "200".to_string(),
             message: "Metrics reported successfully".to_string(),
         }))
     }
+
+    async fn report_systemctl(
+        &self,
+        request: Request<SystemctlRequest>,
+    ) -> Result<Response<SystemctlResponse>, Status> {
+        info!("[hub] New system info request");
+        let agent_key = request
+            .metadata()
+            .get("x-agent-key")
+            .ok_or(Status::unauthenticated("Missing key"))?
+            .to_str()
+            .map_err(|e| {
+                error!("[hub] Authorization failed for agent: {e:?}");
+                Status::invalid_argument("Invalid key")
+            })?;
+
+        let valid = sqlx::query!(
+            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
+            agent_key
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
+            Status::internal(format!("Database error: {}", e))
+        })?;
+
+        if valid.is_none() {
+            error!("[hub] No system info found for agent key: {:?}", agent_key);
+            return Err(Status::unauthenticated("Invalid or inactive agent key"));
+        }
+
+        let system = valid.unwrap();
+        let request = request.into_inner();
+        let services = request.services;
+        for service in services {
+            let existing = sqlx::query!(
+                r#"SELECT id FROM services WHERE system = $1 AND name = $2"#,
+                system.id,
+                service.service_name
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                error!("[hub] Failed to query existing service: {e:?}");
+                Status::internal("Database error")
+            })?;
+
+            if let Some(existing_service) = existing {
+                // update existing service
+                sqlx::query!(
+                    r#"
+                    UPDATE services
+                    SET description = $1,
+                        state = $2,
+                        pid = $3,
+                        cpu = $4
+                    WHERE id = $5
+                    "#,
+                    service.description,
+                    service.state,
+                    service.pid as i32,
+                    service.cpu,
+                    existing_service.id
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    error!("[hub] Failed to update service: {e:?}");
+                    Status::internal("Database error")
+                })?;
+                continue;
+            } else {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO services (system, name, description, state, pid, cpu)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    "#,
+                    system.id,
+                    service.service_name,
+                    service.description,
+                    service.state,
+                    service.pid as i32,
+                    service.cpu
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    error!("[hub] Failed to insert service: {e:?}");
+                    Status::internal("Database error")
+                })?;
+            }
+        }
+
+        info!("[hub] Systemctl services updated successfully");
+        Ok(Response::new(SystemctlResponse {
+            status: "200".to_string(),
+            message: "Services reported successfully".to_string(),
+        }))
+    }
 }
 
-mod proto;
 mod lib;
+mod proto;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -319,7 +422,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server_cert_path = certs_dir.join("server.crt");
     let server_key_path = certs_dir.join("server.key");
     if !server_cert_path.exists() || !server_key_path.exists() {
-        info!("[hub] Server certificate or key not found in {:?}", certs_dir);
+        info!(
+            "[hub] Server certificate or key not found in {:?}",
+            certs_dir
+        );
         std::process::exit(1);
     }
 
@@ -341,10 +447,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let ca_cert = fs::read_to_string("certs/ca.crt")?;
     let server_tls_config = ServerTlsConfig::new()
-        .identity(tonic::transport::Identity::from_pem(server_cert, server_key))
+        .identity(tonic::transport::Identity::from_pem(
+            server_cert,
+            server_key,
+        ))
         .client_ca_root(tonic::transport::Certificate::from_pem(ca_cert))
         .client_auth_optional(false);
-
 
     let env = Env::default()
         .filter("MY_LOG_LEVEL")
@@ -361,7 +469,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let db_pool = setup_db().await?;
-    
+
     info!("[hub] connected to database");
 
     let monitor = MyMonitor {
@@ -372,11 +480,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tls_config(server_tls_config)?
         .add_service(SystemMonitorServer::new(monitor))
         .serve(addr);
-    
+
     info!("[hub] started on https://{}", addr);
-    
+
     if let Err(e) = server.await {
-        error!("Tonic server error: {}", e);
+        error!("rpc server error: {}", e);
     }
     Ok(())
 }

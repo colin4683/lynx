@@ -4,25 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tokio = {version = "1.0", features = ["full"]}
-tonic = { version="0.13.1", features = ["_tls-any"] } # gRPC framework
+tokio = { version = "1.0", features = ["full"] }
+tonic = { version = "0.13.1", features = ["_tls-any"] } # gRPC framework
 prost = "0.13.5" # Protobuf codegen
-sqlx = {version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "chrono"]}
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "chrono"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 dotenv = "0.15.0"
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.17.0", features = ["v4", "serde"] }
 axum = "0.8.4"
 serde_json = "1.0.140"
 serde = { version = "1.0.219", features = ["derive"] }
-tower = {version = "0.5.2", features = ["full"]}
+tower = { version = "0.5.2", features = ["full"] }
 tower-http = { version = "0.6.6", features = ["cors", "full"] }
 axum-htmx = "0.8.1"
 env_logger = "0.11.8"
 log = "0.4.27"
 reqwest = { version = "0.12.20", features = ["json"] }
-lettre = {version="0.11.17", features=["smtp-transport", "builder"]}
+lettre = { version = "0.11.17", features = ["smtp-transport", "builder"] }
 thiserror = "2.0.12"
 regex = "1.11.1"
+dashmap = "6.1.0"
+bincode = "1.3.3"
 [build-dependencies]
 prost-build = "0.13.5"
 tonic-build = "0.13.1"
