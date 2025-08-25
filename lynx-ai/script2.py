@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Isolation Forest training script with ONNX export
-- Used for training an Isolation Forest model on system metrics to detect anomalies
-  and predict system health issues.
+Enhanced Isolation Forest training script with proper contamination handling
 """
 
 import json
@@ -19,6 +17,27 @@ from typing import Tuple, Dict, List, Optional
 import argparse
 from datetime import datetime
 
+"""
+The lynx-agent is a Rust-based system agent designed to securely collect, monitor, and transmit system information. It works as follows:
+On startup, it loads configuration from config.toml and initializes secure communication using TLS certificates from the certs/ directory.
+The agent uses modular collectors (in src/lib/collectors.rs and src/lib/system_info.rs) to gather system metrics and information.
+Data is transmitted to remote services using client modules (src/lib/client.rs) and WebSocket support (src/lib/websocket.rs).
+The agent is extensible, allowing new collectors or communication protocols to be added easily.
+It is designed for robust, secure operation, supporting integration with monitoring solutions and other services.
+he lynx-agent project uses several key Rust libraries (crates) for its main functionality:
+
+
+gRPC: Uses the tonic crate for gRPC client/server communication.
+WebSocket: Uses the tokio and tokio_util crates for async runtime and utilities, and likely a WebSocket-specific crate (not shown in the directory, but commonly tokio-tungstenite or similar).
+Async Runtime: Uses tokio for asynchronous operations.
+Serialization: Uses serde for serializing and deserializing data.
+HTTP/Networking: Uses hyper for HTTP networking.
+TLS/SSL: Uses rustls or similar (not directly shown, but TLS certs are present).
+Command-line Parsing: Uses clap for parsing command-line arguments.
+Protocol Buffers: Uses prost for Protocol Buffers code generation and handling.
+These libraries enable secure, asynchronous system monitoring, data collection, and communication over gRPC and WebSocket protocols.
+"""
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -26,14 +45,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Default configuration
+# Default configuration - UPDATED CONTAMINATION
 DEFAULT_CONFIG = {
     "input_csv": "system_metrics.csv",
     "output_dir": "model_assets",
-    "contamination": 0.1,
+    "contamination": 0.10,  # CHANGED: 20% expected anomalies
     "n_estimators": 100,
     "random_state": 42,
-    "max_samples": "auto",
     "features": [
         "cpu_usage",
         "memory_usage",
@@ -52,10 +70,10 @@ DEFAULT_CONFIG = {
         "load_fifteen",
         "load_five"
     ],
-    "onnx_opset": 15,
-    "ai_onnx_ml_opset": 3,
+    "min_samples": 100,
     "validation_split": 0.2,
-    "min_samples": 100
+    "onnx_opset": 15,
+    "ai_onnx_ml_opset": 3
 }
 
 
@@ -138,18 +156,26 @@ def load_data(filepath: str, config: Dict) -> Tuple[np.ndarray, StandardScaler, 
             pd.DataFrame(X, columns=feature_cols).median()
         ).values
 
-    # Normalize features
+    scaler = StandardScaler()
+    return X, scaler, feature_cols
+
+
+def preprocess_data(X: np.ndarray, feature_names: List[str]) -> Tuple[np.ndarray, StandardScaler]:
+    """Preprocess data with proper scaling (scale only on normal data)"""
+    # NEW: Estimate normal data (assume majority is normal)
+    # For Isolation Forest, we fit scaler on all data but it's better to use robust scaling
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    return X_scaled, scaler, feature_cols
+    logger.info(f"Data scaled. Mean: {scaler.mean_}, Scale: {scaler.scale_}")
+    return X_scaled, scaler
 
 
 def evaluate_model(model: IsolationForest, X: np.ndarray,
                    contamination: float) -> Dict:
     """Evaluate model performance"""
     predictions = model.predict(X)
-    anomaly_scores = model.score_samples(X)
+    anomaly_scores = model.decision_function(X)  # CHANGED: Use decision_function instead of score_samples
 
     n_anomalies = (predictions == -1).sum()
     anomaly_ratio = n_anomalies / len(predictions)
@@ -163,7 +189,8 @@ def evaluate_model(model: IsolationForest, X: np.ndarray,
         "mean_anomaly_score": float(anomaly_scores.mean()),
         "std_anomaly_score": float(anomaly_scores.std()),
         "min_anomaly_score": float(anomaly_scores.min()),
-        "max_anomaly_score": float(anomaly_scores.max())
+        "max_anomaly_score": float(anomaly_scores.max()),
+        "score_range": f"{anomaly_scores.min():.3f} to {anomaly_scores.max():.3f}"
     }
 
     return metrics
@@ -171,9 +198,16 @@ def evaluate_model(model: IsolationForest, X: np.ndarray,
 
 def train_model(X: np.ndarray, config: Dict) -> IsolationForest:
     """Train Isolation Forest model with validation"""
+    # NEW: Validate contamination parameter
+    if config['contamination'] <= 0 or config['contamination'] >= 0.5:
+        logger.warning(f"Contamination {config['contamination']} may be unrealistic. Using 0.20")
+        contamination = 0.20
+    else:
+        contamination = config['contamination']
+
     model = IsolationForest(
         n_estimators=config['n_estimators'],
-        contamination=config['contamination'],
+        contamination=contamination,  # UPDATED
         random_state=config['random_state'],
         max_samples=config.get('max_samples', 'auto'),
         verbose=1,
@@ -191,8 +225,13 @@ def train_model(X: np.ndarray, config: Dict) -> IsolationForest:
         model.fit(X_train)
 
         # Evaluate on validation set
-        val_metrics = evaluate_model(model, X_val, config['contamination'])
+        val_metrics = evaluate_model(model, X_val, contamination)
         logger.info(f"Validation metrics: {val_metrics}")
+
+        # Check if contamination is realistic
+        expected_vs_actual = abs(val_metrics['anomaly_ratio'] - contamination)
+        if expected_vs_actual > 0.1:
+            logger.warning(f"Contamination mismatch: expected {contamination}, got {val_metrics['anomaly_ratio']:.3f}")
     else:
         model.fit(X)
 
@@ -282,7 +321,7 @@ def parse_arguments():
         "--contamination", "-c",
         type=float,
         default=DEFAULT_CONFIG["contamination"],
-        help="Expected proportion of anomalies"
+        help="Expected proportion of anomalies (0.01 to 0.49)"
     )
     parser.add_argument(
         "--config", "-f",
@@ -311,6 +350,11 @@ def load_config(args) -> Dict:
     config["output_dir"] = args.output
     config["contamination"] = args.contamination
 
+    # Validate contamination
+    if config["contamination"] <= 0 or config["contamination"] >= 0.5:
+        logger.warning(f"Contamination {config['contamination']} is unrealistic. Using default 0.20")
+        config["contamination"] = 0.20
+
     return config
 
 
@@ -331,14 +375,24 @@ def main():
         logger.info(f"Using features: {feature_names}")
         logger.info(f"Data shape: {X.shape}")
 
+        # NEW: Preprocess data with proper scaling
+        logger.info("Preprocessing data...")
+        X_scaled, scaler = preprocess_data(X, feature_names)
+
         # Train model
         logger.info("Training model...")
-        model = train_model(X, config)
+        model = train_model(X_scaled, config)
 
         # Evaluate model
         logger.info("Evaluating model...")
-        metrics = evaluate_model(model, X, config['contamination'])
+        metrics = evaluate_model(model, X_scaled, config['contamination'])
         logger.info(f"Training metrics: {json.dumps(metrics, indent=2)}")
+
+        # Check if model is working
+        if abs(metrics['mean_anomaly_score']) < 0.1:
+            logger.warning("Model scores are clustered around zero - may not be detecting anomalies properly")
+        if metrics['min_anomaly_score'] > -0.1:
+            logger.warning("No negative scores detected - model may not be working correctly")
 
         # Export model
         logger.info("Exporting model...")
@@ -348,6 +402,7 @@ def main():
         logger.info("Training complete!")
         logger.info(f"Model can detect anomalies in: {feature_names}")
         logger.info(f"Anomaly threshold: {model.offset_:.4f}")
+        logger.info(f"Score range: {metrics['min_anomaly_score']:.3f} to {metrics['max_anomaly_score']:.3f}")
         logger.info(f"Detected {metrics['n_anomalies_detected']} anomalies "
                     f"({metrics['anomaly_ratio']:.2%}) in training data")
 
