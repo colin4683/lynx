@@ -34,6 +34,7 @@ message SystemService {
     uint64 pid = 3;
     string state = 4;
     string cpu = 5;
+    string memory = 6;
 }
 
 message SystemctlResponse {
