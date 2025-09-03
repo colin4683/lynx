@@ -1,4 +1,4 @@
-import { pgTable, foreignKey, text, integer, boolean, timestamp, index, unique, serial, doublePrecision, bigint } from "drizzle-orm/pg-core"
+import { pgTable, foreignKey, text, integer, boolean, timestamp, index, serial, unique, doublePrecision, bigint } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -60,6 +60,23 @@ export const alertSystems = pgTable("alert_systems", {
 			foreignColumns: [systems.id],
 			name: "alert_systems_systems_id_fk"
 		}).onUpdate("cascade").onDelete("cascade"),
+]);
+
+export const services = pgTable("services", {
+	id: serial().notNull(),
+	system: integer().notNull(),
+	name: text().notNull(),
+	description: text(),
+	state: text(),
+	pid: integer(),
+	cpu: text(),
+	memory: text(),
+}, (table) => [
+	foreignKey({
+			columns: [table.system],
+			foreignColumns: [systems.id],
+			name: "services_systems_id_fk"
+		}),
 ]);
 
 export const systems = pgTable("systems", {

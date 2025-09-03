@@ -54,6 +54,10 @@
 			};
 		});
 	})
+	let originalServers = $derived.by(() => {
+		if (!rule.alertSystems) return [];
+		return rule.alertSystems;
+	})
 	let rules = $state(originalRules as Expression[]);
 	let fieldValue = $state('');
 	let operatorValue = $state('');
@@ -75,6 +79,13 @@
 	$effect(() => {
 		valid = !!rawExpression.length;
 	});
+
+	function handleAddServer(system: any) {
+		// add to originalServers if not already present
+		if (!originalServers.find((s) => s.id === system.id)) {
+			originalServers = [...originalServers, system];
+		}
+	}
 
 	function sendForm() {
 		// submit post form
@@ -107,7 +118,14 @@
 </script>
 
 <div class="">
+	
 	<div class="mt-4 flex w-full flex-col items-start gap-2">
+		<div class="flex items-center align-middle justify-between px-20 mb-4 absolute left-80">
+			<button class="flex items-center align-middle px-3 py-1 bg-background border border-border rounded hover:bg-[var(--foreground)]" onclick={() => window.history.back()}>
+				<span class="icon-[line-md--arrow-left] w-5 h-5"></span>
+				Back
+			</button>
+		</div>
 		<h1 class="text-2xl font-bold">{rule.name}</h1>
 		<p class="text-muted-foreground text-sm">Edit expressions to create complex alert rules.</p>
 		<Switch checked={true} />
@@ -386,6 +404,19 @@
 		</div>
 	</div>
 
+	<div class="mt-4 flex flex-col">
+		<h1 class="text-lg font-extrabold">Servers</h1>
+		<p class="text-muted-foreground mb-5 text-sm">Select servers to apply this rule to.</p>
+		<div class="w-1/2 space-y-2 max-h-60 overflow-y-auto pr-2">
+			{#each data.systems as system}
+				<div class="flex w-full items-center justify-between gap-2">
+					<Label for="server-{system.id}">{system.label}</Label>
+					<Switch id="server-{system.id}" class="cursor-pointer" checked={false} onCheckedChange={} />
+				</div>
+			{/each}
+		</div>
+	</div>
+
 	<div class="mt-4">
 		<Button
 			disabled={!valid}
@@ -401,7 +432,7 @@
 				editor = 'builder';
 			}}
 		>
-			Create Rule
+			Save Changes
 		</Button>
 	</div>
 </div>

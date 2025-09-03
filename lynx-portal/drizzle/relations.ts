@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, sessions, alertRules, alertSystems, systems, disks, metrics, alertHistory } from "./schema";
+import { users, sessions, alertRules, alertSystems, systems, services, disks, metrics, alertHistory } from "./schema";
 
 export const sessionsRelations = relations(sessions, ({one}) => ({
 	user: one(users, {
@@ -36,6 +36,7 @@ export const alertSystemsRelations = relations(alertSystems, ({one}) => ({
 
 export const systemsRelations = relations(systems, ({one, many}) => ({
 	alertSystems: many(alertSystems),
+	services: many(services),
 	user: one(users, {
 		fields: [systems.admin],
 		references: [users.id]
@@ -43,6 +44,13 @@ export const systemsRelations = relations(systems, ({one, many}) => ({
 	disks: many(disks),
 	metrics: many(metrics),
 	alertHistories: many(alertHistory),
+}));
+
+export const servicesRelations = relations(services, ({one}) => ({
+	system: one(systems, {
+		fields: [services.system],
+		references: [systems.id]
+	}),
 }));
 
 export const disksRelations = relations(disks, ({one}) => ({

@@ -81,6 +81,24 @@ export const alertSystems = pgTable("alert_systems", {
 	}),
 ]);
 
+export const services = pgTable("services", {
+	id: serial().notNull(),
+	system: integer().notNull(),
+	name: text().notNull(),
+	description: text(),
+	state: text(),
+	pid: integer(),
+	cpu: text(),
+	memory: text(),
+}, (table) => [
+	foreignKey({
+		columns: [table.system],
+		foreignColumns: [systems.id],
+		name: "services_systems_id_fk"
+	}),
+]);
+
+
 export const alertHistory = pgTable("alert_history", {
 	id: integer().generatedAlwaysAsIdentity({ name: "alert_history_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
 	system: integer().notNull(),
@@ -186,14 +204,26 @@ export const usersRelations = relations(users, ({many}) => ({
 	systems: many(systems),
 }));
 
+
 export const systemsRelations = relations(systems, ({one, many}) => ({
+	alertSystems: many(alertSystems),
+	services: many(services),
 	user: one(users, {
 		fields: [systems.admin],
 		references: [users.id]
 	}),
 	disks: many(disks),
 	metrics: many(metrics),
+	alertHistories: many(alertHistory),
 }));
+
+export const servicesRelations = relations(services, ({one}) => ({
+	system: one(systems, {
+		fields: [services.system],
+		references: [systems.id]
+	}),
+}));
+
 
 export const disksRelations = relations(disks, ({one}) => ({
 	system: one(systems, {

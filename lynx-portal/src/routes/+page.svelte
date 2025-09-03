@@ -106,7 +106,6 @@
 							<p class="text-sm text-muted-foreground">{relativeDate(alert.date)}</p>
 							<button class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 hover:bg-red-200" onclick={() => {
 								data.alerts.splice(i, 1);
-
 							}}>Dismiss</button>
 						</div>
 					</div>

@@ -66,6 +66,12 @@
 
 <div class="">
 	<div class="flex flex-col items-start gap-2 mt-4 w-full">
+		<div class="flex items-center align-middle justify-between px-20 mb-4 absolute left-80">
+			<button class="flex items-center align-middle px-3 py-1 bg-background border border-border rounded hover:bg-[var(--foreground)]" onclick={() => window.history.back()}>
+				<span class="icon-[line-md--arrow-left] w-5 h-5"></span>
+				Back
+			</button>
+		</div>
 		<h1 class="text-2xl font-bold">Create Rule</h1>
 		<p class="text-sm text-muted-foreground">Build expressions to create complex alert rules.</p>
 		<Switch checked={true} />

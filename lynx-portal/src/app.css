@@ -71,10 +71,14 @@ body {
   font-family: "Inter", "Source Code Pro", monospace;
   font-weight: 400;
   background-color: var(--background);
-  background-image: linear-gradient(to right, rgba(31, 31, 31, 0.3) 1px, transparent 1px),
-  linear-gradient(to bottom, rgba(31, 31, 31, 0.3) 1px, transparent 1px);
-  background-repeat: repeat;
-    background-size: 15px 15px;
+  min-height: 100vh;
+  background-image:
+          radial-gradient(ellipse 80% 80% at 80% 90%, rgba(168, 237, 131, .08) 0%, transparent 50%),
+          linear-gradient(to right, rgba(31, 31, 31, 0.3) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(31, 31, 31, 0.3) 1px, transparent 1px);
+  background-repeat: no-repeat, repeat, repeat;
+  background-size: 100% 100%, 100% 100%, 15px 15px, 15px 15px;
+  background-attachment: fixed;
   color: var(--text);
 }
 
