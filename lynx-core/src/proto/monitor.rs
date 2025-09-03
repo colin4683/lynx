@@ -46,6 +46,8 @@ pub struct SystemService {
     pub state: ::prost::alloc::string::String,
     #[prost(string, tag = "5")]
     pub cpu: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub memory: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemctlResponse {

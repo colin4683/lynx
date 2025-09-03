@@ -3,6 +3,10 @@ name = "lynx-core"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "lynx_core"
+path = "src/corelib.rs"
+
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
 tonic = { version = "0.13.1", features = ["_tls-any"] } # gRPC framework
@@ -25,6 +29,10 @@ thiserror = "2.0.12"
 regex = "1.11.1"
 dashmap = "6.1.0"
 bincode = "1.3.3"
+
+[dev-dependencies]
+tempfile = "3.10.1"
+
 [build-dependencies]
 prost-build = "0.13.5"
 tonic-build = "0.13.1"
