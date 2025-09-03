@@ -15,3 +15,4 @@ lynx-agent/.env
 
 certs/
 *.db
+lynx-core/cache.snapshot

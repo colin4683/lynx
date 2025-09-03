@@ -50,7 +50,7 @@ pub async fn sysinfo_collector(mut tx: mpsc::Sender<CollectorRequest>) {
 }
 
 pub async fn systemctl_collector(mut tx: mpsc::Sender<CollectorRequest>, cache: Arc<FastCache>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    let mut interval = tokio::time::interval(Duration::from_secs(60 * 5));
     info!("[agent] Systemctl collector started, collecting every 10 minutes...");
     loop {
         let now = Instant::now();

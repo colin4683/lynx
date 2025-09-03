@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tonic::metadata::MetadataValue;
@@ -108,6 +109,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cache.clone(),
         ));
         handles.push(systemctl_handle);
+
+        // Cleanup task for the cache
+        let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
+            cache.clone(),
+            Duration::from_secs(7 * 60),
+        ));
+        handles.push(cache_cleanup_handle);
     }
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 

@@ -73,9 +73,6 @@ pub async fn collect_system_info(system: &mut System) -> SystemInfoRequest {
         memory_total: system.total_memory(),
         swap_total: system.total_swap(),
     };
-
-    println!("System Info: {:#?}", build_specs);
-
     SystemInfoRequest {
         hostname,
         os: os_info,
@@ -103,6 +100,7 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                 let description = properties.description;
                 let enabled = active_state == ActiveState::Active;
                 let cpu = properties.cpu;
+                let memory = properties.memory;
                 // Build SystemService struct
                 let service = crate::lib::cache::SystemService {
                     name: unit.unit_name.clone(),
@@ -111,6 +109,7 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                     description,
                     pid,
                     cpu_usage: cpu,
+                    memory_usage: memory,
                 };
                 // Check cache
                 let cached = cache
@@ -134,20 +133,22 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
 
     let services = changed_services
         .into_iter()
-        .map(|unit| crate::proto::monitor::SystemService {
-            service_name: unit.unit_name.clone(),
-            description: unit.description,
-            state: format!("{:?}", unit.active),
-            pid: systemctl
-                .create_unit(&unit.unit_name.clone())
-                .ok()
-                .and_then(|p| p.pid)
-                .unwrap_or(0),
-            cpu: systemctl
-                .create_unit(&unit.unit_name.clone())
-                .ok()
-                .and_then(|p| p.cpu)
-                .unwrap_or("unknown".to_string()),
+        .map(|unit| {
+            let unit_props = systemctl.create_unit(&unit.unit_name).ok();
+            crate::proto::monitor::SystemService {
+                service_name: unit.unit_name.clone(),
+                description: unit.description,
+                state: format!("{:?}", unit.active),
+                pid: unit_props.as_ref().and_then(|p| p.pid).unwrap_or(0),
+                cpu: unit_props
+                    .as_ref()
+                    .and_then(|p| p.cpu.clone())
+                    .unwrap_or("unknown".to_string()),
+                memory: unit_props
+                    .as_ref()
+                    .and_then(|p| p.memory.clone())
+                    .unwrap_or("unknown".to_string()),
+            }
         })
         .collect();
     SystemctlRequest { services }

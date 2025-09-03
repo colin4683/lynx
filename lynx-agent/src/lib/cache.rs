@@ -2,9 +2,11 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{config, Decode, Encode};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use log::info;
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqlitePool, Row};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -40,6 +42,7 @@ pub struct SystemService {
     pub description: Option<String>,
     pub pid: Option<u64>,
     pub cpu_usage: Option<String>,
+    pub memory_usage: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -263,6 +266,7 @@ impl FastCache {
     }
 
     pub async fn clear_expired(&self) -> CacheResult<usize> {
+        info!("[cache] Running cleanup of expired cache entries");
         let now = Utc::now();
         let mut expired_keys = Vec::new();
 
@@ -278,6 +282,7 @@ impl FastCache {
         for key in expired_keys {
             self.delete(&key).await?;
         }
+        info!("[cache] Cleaned up {} expired cache entries", count);
 
         Ok(count)
     }
@@ -463,9 +468,8 @@ impl FastCache {
 }
 
 // Background cleanup task
-pub async fn start_cleanup_task(cache: Arc<FastCache>, interval: chrono::Duration) {
-    let mut interval_timer =
-        tokio::time::interval(std::time::Duration::from_secs(interval.num_seconds() as u64));
+pub async fn start_cleanup_task(cache: Arc<FastCache>, interval: Duration) {
+    let mut interval_timer = tokio::time::interval(Duration::from_secs(interval.as_secs()));
 
     loop {
         interval_timer.tick().await;
