@@ -382,7 +382,7 @@
 			<span class={`w-3.5 h-3.5 inline-block rounded-full border animate-pulse ${data.system.active ? 'bg-green-300/60 border-green-400' : 'bg-red-400/60 border-red-400'}`}></span>
 		</p>
 		<div class="flex items-start justify-end gap-3 absolute right-0 -top-1/3">
-			<span class="icon-[fluent--alert-32-regular] text-white/80 hover:text-primary transition-colors active:scale-95 w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/alerts/history/${data.system.id}`}></span>
+			<span class="icon-[fluent--alert-32-regular] text-white/80 hover:text-primary transition-colors active:scale-95 w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/alerts`}></span>
 			<CommandStream />
 			<span class="icon-[material-icon-theme--systemd] w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/services`}></span>
 		</div>

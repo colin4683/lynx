@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
+	import { Button } from '$lib/components/ui/button';
+	import ServiceSettings from '$lib/components/ServiceSettings.svelte';
 
 	const {data} = $props();
 
@@ -50,10 +52,20 @@
 			<span class="icon-[line-md--arrow-left] w-5 h-5"></span>
 			Back
 		</button>
-		<h1 class="text-3xl font-bold text-white drop-shadow">Services</h1>
 	</div>
 	<div class="w-full max-w-4xl glass-bg rounded-xl p-8 shadow-lg border border-white/10">
-		<p class="text-base text-gray-300 mb-6">Manage services for <span class="font-semibold text-white">{data.system.label}</span> below.</p>
+		<div class="w-full flex items-start align-middle justify-between">
+			<div class="flex flex-col">
+				<h1 class="text-3xl font-bold text-white drop-shadow">Services</h1>
+				<p class="text-base text-gray-300 mb-6">Manage services for <span class="font-semibold text-white">{data.system.label}</span> below.</p>
+			</div>
+
+			<div class="flex items-center gap-4">
+				<ServiceSettings />
+			</div>
+
+
+		</div>
 		<input
 			type="text"
 			placeholder="Search services..."
