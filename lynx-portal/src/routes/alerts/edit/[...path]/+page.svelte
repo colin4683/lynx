@@ -58,6 +58,35 @@
 		if (!rule.alertSystems) return [];
 		return rule.alertSystems;
 	})
+	let notifiers = $derived.by(() => {
+		// find all rules active already
+		let alertNotifiers = rule.alertNotifiers ? rule.alertNotifiers.map((an) => an.notifierId) : [];
+		return data.notifiers.map((notifier) => ({
+			...notifier,
+			active: alertNotifiers.includes(notifier.id)
+		}));
+	})
+	let selectedNotifierIds = $state(new Set<number>());
+
+	// Initialize selected notifiers from existing alert rule data
+	$effect(() => {
+		if (rule.alertNotifiers) {
+			selectedNotifierIds = new Set(rule.alertNotifiers.map(an => an.notifier.id));
+		}
+	});
+
+	function toggleNotifier(notifierId: number) {
+		if (selectedNotifierIds.has(notifierId)) {
+			selectedNotifierIds.delete(notifierId);
+		} else {
+			selectedNotifierIds.add(notifierId);
+		}
+		// Trigger reactivity
+		selectedNotifierIds = new Set(selectedNotifierIds);
+
+		console.log('Selected Notifier IDs:', Array.from(selectedNotifierIds));
+	}
+
 	let rules = $state(originalRules as Expression[]);
 	let fieldValue = $state('');
 	let operatorValue = $state('');
@@ -89,13 +118,14 @@
 
 	function sendForm() {
 		// submit post form
-		fetch('/alerts/new', {
+		fetch('/alerts/edit', {
 			method: 'POST',
 			body: JSON.stringify({
 				name: ruleName,
 				description: ruleDescription,
 				severity: 'low',
-				expression: rawExpression
+				expression: rawExpression,
+				notifiers: Array.from(selectedNotifierIds),
 			}),
 			headers: {
 				'Content-Type': 'application/json'
@@ -103,8 +133,8 @@
 		})
 			.then((response) => {
 				if (response.ok) {
-					toast.success(`Created new alert rule: ${ruleName}`);
-					window.location.href = '/alerts';
+					toast.success(`Saved`);
+					valid = true;
 				} else {
 					toast.error(`Failed to create alert rule: ${ruleName}`);
 				}
@@ -120,7 +150,7 @@
 <div class="">
 	
 	<div class="mt-4 flex w-full flex-col items-start gap-2">
-		<div class="flex items-center align-middle justify-between px-20 mb-4 absolute left-80">
+		<div class="fixed flex items-center align-middle justify-between px-20 mb-4 right-2/3">
 			<button class="flex items-center align-middle px-3 py-1 bg-background border border-border rounded hover:bg-[var(--foreground)]" onclick={() => window.history.back()}>
 				<span class="icon-[line-md--arrow-left] w-5 h-5"></span>
 				Back
@@ -393,29 +423,16 @@
 		<p class="text-muted-foreground mb-5 text-sm">Select notifiers to use for this rule.</p>
 
 		<div class="w-1/2 space-y-2">
-			<div class="flex w-full items-center justify-between gap-2">
-				<Label for="email-notifier">Emails</Label>
-				<Switch id="email-notifier" class="cursor-pointer" checked={true} />
-			</div>
-			<div class="flex w-full items-center justify-between gap-2">
-				<Label for="webhook-notifier">Discord</Label>
-				<Switch id="webhook-notifier" class="cursor-pointer" checked={false} />
-			</div>
-		</div>
-	</div>
-
-	<div class="mt-4 flex flex-col">
-		<h1 class="text-lg font-extrabold">Servers</h1>
-		<p class="text-muted-foreground mb-5 text-sm">Select servers to apply this rule to.</p>
-		<div class="w-1/2 space-y-2 max-h-60 overflow-y-auto pr-2">
-			{#each data.systems as system}
+			{#each notifiers as notifier}
 				<div class="flex w-full items-center justify-between gap-2">
-					<Label for="server-{system.id}">{system.label}</Label>
-					<Switch id="server-{system.id}" class="cursor-pointer" checked={false} onCheckedChange={} />
+					<Label for={'notifier-' + notifier.id}>{notifier.type}</Label>
+					<Switch id={'notifier-' + notifier.id} class="cursor-pointer" checked={selectedNotifierIds.has(notifier.id)} onCheckedChange={() => toggleNotifier(notifier.id)} />
 				</div>
 			{/each}
 		</div>
 	</div>
+
+
 
 	<div class="mt-4">
 		<Button

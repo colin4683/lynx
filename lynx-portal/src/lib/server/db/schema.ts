@@ -81,6 +81,22 @@ export const alertSystems = pgTable("alert_systems", {
 	}),
 ]);
 
+export const alertNotifiers = pgTable("alert_notifiers", {
+	ruleId: integer("rule_id").notNull(),
+	notifierId: integer("notifier_id").notNull(),
+}, (table) => [
+	foreignKey({
+		columns: [table.ruleId],
+		foreignColumns: [alertRules.id],
+		name: "alert_notifiers_alert_rules_id_fk"
+	}),
+	foreignKey({
+		columns: [table.notifierId],
+		foreignColumns: [notifiers.id],
+		name: "alert_notifiers_notifiers_id_fk"
+	}),
+]);
+
 export const services = pgTable("services", {
 	id: serial().notNull(),
 	system: integer().notNull(),
@@ -117,6 +133,19 @@ export const alertHistory = pgTable("alert_history", {
 	}),
 ]);
 
+
+export const notifiers = pgTable("notifiers", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "notifiers_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	user: integer(),
+	type: text().notNull(),
+	value: text().notNull(),
+}, (table) => [
+	foreignKey({
+		columns: [table.user],
+		foreignColumns: [users.id],
+		name: "notifiers_users_id_fk"
+	}),
+]);
 
 
 export const systems = pgTable("systems", {
@@ -201,9 +230,10 @@ export const sessionsRelations = relations(sessions, ({one}) => ({
 
 export const usersRelations = relations(users, ({many}) => ({
 	sessions: many(sessions),
+	alertRules: many(alertRules),
+	notifiers: many(notifiers),
 	systems: many(systems),
 }));
-
 
 export const systemsRelations = relations(systems, ({one, many}) => ({
 	alertSystems: many(alertSystems),
@@ -224,6 +254,13 @@ export const servicesRelations = relations(services, ({one}) => ({
 	}),
 }));
 
+export const notifiersRelations = relations(notifiers, ({one, many}) => ({
+	user: one(users, {
+		fields: [notifiers.user],
+		references: [users.id]
+	}),
+	alertNotifiers: many(alertNotifiers),
+}));
 
 export const disksRelations = relations(disks, ({one}) => ({
 	system: one(systems, {
@@ -246,6 +283,7 @@ export const alertRulesRelations = relations(alertRules, ({one, many}) => ({
 		references: [users.id]
 	}),
 	alertSystems: many(alertSystems),
+	alertNotifiers: many(alertNotifiers),
 }));
 
 export const alertSystemsRelations = relations(alertSystems, ({one}) => ({
@@ -256,6 +294,18 @@ export const alertSystemsRelations = relations(alertSystems, ({one}) => ({
 	system: one(systems, {
 		fields: [alertSystems.systemId],
 		references: [systems.id]
+	}),
+}));
+
+
+export const alertNotifiersRelations = relations(alertNotifiers, ({one}) => ({
+	alertRule: one(alertRules, {
+		fields: [alertNotifiers.ruleId],
+		references: [alertRules.id]
+	}),
+	notifier: one(notifiers, {
+		fields: [alertNotifiers.notifierId],
+		references: [notifiers.id]
 	}),
 }));
 

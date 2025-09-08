@@ -2,6 +2,7 @@ import type { Actions } from './$types';
 import { redirect, type RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { alertRules } from '$lib/server/db/schema';
+import type { PageServerLoadEvent } from '../../../../.svelte-kit/types/src/routes/$types';
 
 
 
@@ -9,6 +10,36 @@ import { alertRules } from '$lib/server/db/schema';
 export const actions: Actions = {
 	default: action
 };
+
+export const load = async (event: PageServerLoadEvent) => {
+	event.depends('app:alerts');
+
+	if (event.locals.session == null || event.locals.user == null) {
+		return { redirect: "/login" };
+	}
+
+	if (!event.locals.user.emailVerified) {
+		return { redirect: "/verify-email" };
+	}
+
+	if (!event.locals.user.registered2FA) {
+		return { redirect: "/2fa/setup" };
+	}
+
+	if (!event.locals.session.twoFactorVerified) {
+		return { redirect: "/2fa" };
+	}
+
+	const notifiers = await db.query.notifiers.findMany({
+		where: (notifiers, { eq }) => eq(notifiers.user, event.locals.user!.id),
+		orderBy: (notifiers, { desc }) => desc(notifiers.id)
+	})
+
+	return {
+		notifiers: notifiers ?? [],
+		user: event.locals.user
+	};
+}
 
 async function action(event: RequestEvent) {
 	// save new alert rule

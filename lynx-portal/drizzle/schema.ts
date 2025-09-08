@@ -79,6 +79,19 @@ export const services = pgTable("services", {
 		}),
 ]);
 
+export const notifiers = pgTable("notifiers", {
+	id: integer().generatedAlwaysAsIdentity({ name: "notifiers_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	user: integer(),
+	type: text().notNull(),
+	value: text().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.user],
+			foreignColumns: [users.id],
+			name: "notifiers_users_id_fk"
+		}),
+]);
+
 export const systems = pgTable("systems", {
 	id: serial().primaryKey().notNull(),
 	hostname: text(),
