@@ -1,19 +1,23 @@
-use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
+use crate::lib;
+use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use sysinfo::System;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
+use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 use tokio::sync::{Mutex, Notify};
-use tokio::sync::mpsc::{self, Sender, Receiver, channel};
-
-use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
+use tokio::time::interval;
 use tokio_tungstenite::tungstenite::error::ProtocolError::{HandshakeIncomplete, WrongHttpMethod};
+use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use uuid::Uuid;
+
 type ChildHandle = Arc<Mutex<tokio::process::Child>>;
 type ProcessInfo = (ChildHandle, Arc<Notify>);
 lazy_static::lazy_static! {
@@ -32,19 +36,25 @@ enum WsMessage {
     Execute { command: String, args: Vec<String> },
     #[serde(rename = "stop")]
     Stop,
+    #[serde(rename = "update")]
+    Update,
+    #[serde(rename = "delete")]
+    Delete,
+    #[serde(rename = "live")]
+    Live,
+    #[serde(rename = "startservice")]
+    StartService { service_name: String },
+    #[serde(rename = "stopservice")]
+    StopService { service_name: String },
+    #[serde(rename = "restartservice")]
+    RestartService { service_name: String },
     #[serde(rename = "output")]
     Output(String),
     #[serde(rename = "EOF")]
     EOF,
 }
 
-pub async fn stream_output(
-    recp: Tx,
-    command: String,
-    args: Vec<String>,
-    child: ChildHandle,
-    terminate_signal: Arc<Notify>,
-) {
+pub async fn stream_output(recp: Tx, child: ChildHandle, terminate_signal: Arc<Notify>) {
     let mut child = child.lock().await;
     let stdout = child
         .stdout
@@ -111,7 +121,10 @@ pub async fn start_command(command: String, args: Vec<String>, ws_sender: Tx) ->
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| {
-            let _ = ws_sender.try_send(Message::Text(Utf8Bytes::from(format!("[ERROR] Failed to spawn command: {}", e))));
+            let _ = ws_sender.try_send(Message::Text(Utf8Bytes::from(format!(
+                "[ERROR] Failed to spawn command: {}",
+                e
+            ))));
             error!("[ERROR] Failed to spawn command: {}", e);
             e
         })
@@ -124,13 +137,42 @@ pub async fn start_command(command: String, args: Vec<String>, ws_sender: Tx) ->
         .await
         .insert(process_id, (child_handle.clone(), terminate_signal.clone()));
 
-    tokio::spawn(stream_output(
-        ws_sender,
-        command,
-        args,
-        child_handle,
-        terminate_signal,
-    ));
+    tokio::spawn(stream_output(ws_sender, child_handle, terminate_signal));
+
+    process_id
+}
+
+pub async fn start_metrics_command(ws_sender: Tx) -> Uuid {
+    let process_id = Uuid::new_v4();
+    let mut sys = System::new_all();
+    tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+    let metrics = lib::system_info::collect_metrics(&mut sys).await;
+    let terminate_signal = Arc::new(Notify::new());
+    let temp_child = Command::new("echo")
+        .arg(format!(
+            "CPU: {}%, Memory: {}KB used of {}KB ({}%), Load Avg (1m): {}",
+            metrics.cpu_stats.unwrap().usage_percent,
+            metrics.memory_stats.unwrap().used_kb,
+            metrics.memory_stats.unwrap().total_kb,
+            metrics.memory_stats.unwrap().used_kb / metrics.memory_stats.unwrap().total_kb * 100,
+            metrics.load_average.unwrap().one_minute
+        ))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            error!("[ERROR] Failed to spawn metrics command: {}", e);
+            e
+        })
+        .expect("Failed to spawn metrics command");
+    let child_handle = Arc::new(Mutex::new(temp_child));
+    // Store the process information in the global map
+    RUNNING_PROCESSES
+        .lock()
+        .await
+        .insert(process_id, (child_handle.clone(), terminate_signal.clone()));
+
+    tokio::spawn(stream_output(ws_sender, child_handle, terminate_signal));
 
     process_id
 }
@@ -162,7 +204,8 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                             info!("[ws] Executing command: {} {:?}", command, args);
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
-                                let process_id = start_command(command, args, tx_clone.clone()).await;
+                                let process_id =
+                                    start_command(command, args, tx_clone.clone()).await;
                                 let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
                                     "Started command with ID: {}",
                                     process_id
@@ -173,7 +216,9 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                             let tx_clone = tx.clone();
                             tokio::spawn(async move {
                                 let mut processes = RUNNING_PROCESSES.lock().await;
-                                for (pid, (child_handle, terminate_signal)) in processes.clone().iter() {
+                                for (pid, (child_handle, terminate_signal)) in
+                                    processes.clone().iter()
+                                {
                                     terminate_signal.notify_one();
                                     if let Err(e) = child_handle.lock().await.kill().await {
                                         info!("[ws] Failed to stop command {}: {}", pid, e);
@@ -189,13 +234,33 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                                 }
                             });
                         }
+                        Ok(WsMessage::Update) => {
+                            // todo: Make update script
+                        }
+                        Ok(WsMessage::Delete) => {
+                            // todo: Uninstall self
+                        }
+                        Ok(WsMessage::Live) => {
+                            info!(
+                                "[ws] Starting live relay of system metrics to agent: {}",
+                                addr
+                            );
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                let process_id = start_metrics_command(tx_clone.clone()).await;
+                                let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
+                                    "Started live metrics with thread ID: {}",
+                                    process_id
+                                ))));
+                            });
+                        }
                         Ok(WsMessage::EOF) | Err(_) | _ => {
                             let peers_thread = peers_clone.clone();
                             tokio::spawn(async move {
                                 peers_thread.lock().await.remove(&addr);
                             });
                             return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
-                                HandshakeIncomplete
+                                HandshakeIncomplete,
                             ));
                         }
                     }

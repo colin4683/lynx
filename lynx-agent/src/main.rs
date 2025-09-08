@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         handles.push(systemctl_handle);
 
-        // Cleanup task for the cache
+        // Cleanup task for the systemctl cache
         let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
             cache.clone(),
             Duration::from_secs(7 * 60),

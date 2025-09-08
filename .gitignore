@@ -16,3 +16,5 @@ lynx-agent/.env
 certs/
 *.db
 lynx-core/cache.snapshot
+lynx-agent/agent.log
+lynx-core/core.log
