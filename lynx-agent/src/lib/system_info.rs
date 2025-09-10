@@ -6,7 +6,7 @@ use crate::proto::monitor::{
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use std::str::FromStr;
-use sysinfo::{Components, Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Components, Networks, System};
 use systemctl::ActiveState;
 #[cfg(not(target_os = "windows"))]
 use systemstat::Platform;
@@ -60,8 +60,6 @@ pub async fn collect_system_info(system: &mut System) -> SystemInfoRequest {
     let os_info = sysinfo::System::long_os_version().unwrap_or(String::from(""));
     let kernal_version = System::kernel_version().unwrap_or(String::from(""));
     let uptime = System::uptime();
-    let boot_time = System::boot_time();
-    let users = sysinfo::Users::new_with_refreshed_list().list(); // todo: maybe use?
 
     let build_specs = BuildSpecs {
         cpu_model: system
@@ -116,7 +114,6 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                     .get_system_service(&unit.unit_name)
                     .await
                     .unwrap_or(None);
-                let cached_ref = cached.as_ref();
                 if cached.is_none() || cached.as_ref() != Some(&service) {
                     // Update cache if changed or not present
                     let _ = cache
@@ -143,11 +140,11 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                 cpu: unit_props
                     .as_ref()
                     .and_then(|p| p.cpu.clone())
-                    .unwrap_or("unknown".to_string()),
+                    .unwrap_or_else(|| "unknown".to_string()),
                 memory: unit_props
                     .as_ref()
                     .and_then(|p| p.memory.clone())
-                    .unwrap_or("unknown".to_string()),
+                    .unwrap_or_else(|| "unknown".to_string()),
             }
         })
         .collect();
@@ -255,19 +252,17 @@ async fn collect_network_stats() -> NetworkStats {
 }
 
 pub async fn collect_metrics(system: &mut System) -> MetricsRequest {
-    system.refresh_all();
+    system.refresh_cpu_all();
+    system.refresh_memory();
     tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_cpu(),
-    );
+
     let cpu_stats = collect_cpu_stats(system);
     let memory_stats = collect_memory_stats(system);
-    let disk_stats = collect_disk_stats().await;
-    let network_stats = collect_network_stats().await;
     let components = collect_component_stats();
     let load_average = collect_load_average(system);
+    let disk_stats = collect_disk_stats().await;
+    let network_stats = collect_network_stats().await;
+
     MetricsRequest {
         cpu_stats: Some(cpu_stats),
         memory_stats: Some(memory_stats),
