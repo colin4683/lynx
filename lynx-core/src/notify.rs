@@ -1,3 +1,4 @@
+use lettre::transport::smtp::response::Severity;
 use log::info;
 use regex::Regex;
 use reqwest::Client;
@@ -10,6 +11,8 @@ pub struct NotificationRule {
     pub name: String,
     pub enabled: bool,
     pub description: String,
+    pub severity: String,
+    pub expression: String,
     pub conditions: Vec<Condition>,
     pub actions: Vec<String>,
 }
@@ -123,7 +126,7 @@ WHERE system_id = $1
         let id_i32: i32 = alert.get("rule_id");
         let row = sqlx::query(
             r#"
-SELECT id, name, active, expression, severity
+SELECT id, name, description, active, expression, severity
 FROM alert_rules
 WHERE id=$1
 AND active = true
@@ -150,6 +153,7 @@ rule_id = $1
         let enabled: bool = row.get("active");
         let expression: String = row.get("expression");
         let severity: String = row.get("severity");
+        let description: String = row.get("description");
         let mut conditions = Vec::new();
         let mut actions = Vec::new();
 
@@ -206,7 +210,9 @@ WHERE id = $1
             id: id.to_string(),
             name,
             enabled,
-            description: "poop".to_string(),
+            description,
+            severity,
+            expression,
             conditions,
             actions,
         });
@@ -273,8 +279,8 @@ WHERE id = $1
                 };
 
                 let message = format!(
-                    "Alert: {}\nDescription: {}\nCondition met on system ID {}",
-                    rule.name, rule.description, system_id
+                    "```Alert: {}```\n```Description: {}```\nExpression: {}```\n```Condition met on system ID {}```",
+                    rule.name, rule.description, rule.expression, system_id
                 );
 
                 if let Err(e) = service.send(&message).await {
