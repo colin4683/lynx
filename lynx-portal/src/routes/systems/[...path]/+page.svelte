@@ -2,6 +2,7 @@
 	import ProgressBar from '$lib/ProgressBar.svelte';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import CPUChart from '$lib/components/CPUChart.svelte';
+	import AlertSummary from '$lib/components/AlertSummary.svelte';
 	import { goto, invalidate, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import * as Select from '$lib/components/ui/select';
@@ -186,16 +187,21 @@
 
 	const temperatureData = $derived.by(() => {
 		return data.metrics.map((metric: any) => {
-			let component_temp_array = metric.component_temperatures;
+			console.log("Metric:", metric);
+			let component_temp_array = metric.components;
+			console.log("Component temperatures array:", component_temp_array);
 			// combine all components into a single object for each time slot
-			return {
+			let data= {
 				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
 				...Object.fromEntries(
 					(Object.entries(component_temp_array ?? []) ?? []).map(([key, value]) => [(value as any).label, (value as any).avg_temperature])
 				)
 			}
+			console.log("Parsed temperature data point:", data);
+			return data;
 		})
 	})
+
 
 	const temperatureConfig = $state({
 		Composite: {
@@ -451,6 +457,17 @@
 
 <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-3">
 
+	<!-- Alert Summary Component -->
+	<div class="lg:col-span-2">
+		<AlertSummary
+			systemId={data.system.id}
+			appliedRulesCount={data.alertSummary.appliedRulesCount}
+			recentAlertsCount={data.alertSummary.recentAlertsCount}
+			severity={data.alertSummary.severity}
+			lastAlert={data.alertSummary.lastAlert}
+		/>
+	</div>
+
 	<div class="w-full row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border">
 		<h1 class="text-lg font-extrabold">CPU Usage</h1>
 		<p class="text-xs text-muted-foreground -mt-3">Percentage of CPU usage over the last {range}.</p>
@@ -512,7 +529,8 @@
 			config={diskChartConfig}
 			data={diskChartData}
 			x="time"
-			y="read"
+			y="write"
+			stack="overlap"
 			format={(d) => `${d.toFixed(2)}mb/s`}
 			onEvent={refreshChart}
 		/>

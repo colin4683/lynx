@@ -92,27 +92,6 @@ export const load = async ({ params, url, depends }) => {
 	const tz = url.searchParams.get('tz') || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 	console.log(tz);
 	let metrics;
-	if (intervalMinutes === 1) {
-		metrics = await db.execute(sql`
-			SELECT
-				to_char(time, 'YYYY-MM-DD HH24:MI:SS') as time_slot,
-				cpu_usage as cpu_total,
-				memory_used_kb as used_total,
-				net_in as in_total,
-				net_out as out_total,
-				load_one as one_total,
-				load_five as five_total,
-				load_fifteen as fifteen_total,
-				memory_total_kb,
-				components
-			FROM metrics
-			WHERE
-				system_id = ${path_number}
-				AND time >= ${startTime.toISOString()}
-				AND time <= ${endTime.toISOString()}
-			ORDER BY time ASC
-		`);
-	} else {
 		metrics = await db.execute(sql`
 			WITH time_slots AS (
 				SELECT
@@ -157,12 +136,11 @@ export const load = async ({ params, url, depends }) => {
 							 ))
 				FROM component_stats cs
 				WHERE cs.time_slot = t.time_slot
-			) as component_temperatures
+			) as components
 		FROM time_slots t
 		GROUP BY t.time_slot
 		ORDER BY t.time_slot ASC
 		`);
-	}
 
 	let disks;
 	if (intervalMinutes === 1) {
@@ -212,6 +190,51 @@ export const load = async ({ params, url, depends }) => {
 	return {
 		system: system,
 		metrics: metrics,
-		disks: disks
+		disks: disks,
+		// Add alert summary data
+		alertSummary: await getAlertSummary(path_number)
 	};
+
+	async function getAlertSummary(systemId: number) {
+		// Get applied alert rules for this system
+		const appliedAlerts = await db.query.alertSystems.findMany({
+			where: (alertSystems, { eq }) => eq(alertSystems.systemId, systemId),
+			with: {
+				alertRule: true
+			}
+		});
+
+		// Get recent alert history (last 24 hours)
+		const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+		const recentAlerts = await db.query.alertHistory.findMany({
+			where: (alertHistory, { and, eq, gte }) =>
+				and(
+					eq(alertHistory.system, systemId),
+					gte(alertHistory.date, twentyFourHoursAgo.toISOString())
+				),
+			with: {
+				alertRule: true
+			},
+			orderBy: (alertHistory, { desc }) => desc(alertHistory.date),
+			limit: 10
+		});
+
+		// Determine highest severity from recent alerts
+		let highestSeverity = 'none';
+		const severityOrder = ['none', 'low', 'medium', 'high', 'critical'];
+
+		for (const alert of recentAlerts) {
+			const alertSeverity = alert.alertRule.severity.toLowerCase();
+			if (severityOrder.indexOf(alertSeverity) > severityOrder.indexOf(highestSeverity)) {
+				highestSeverity = alertSeverity;
+			}
+		}
+
+		return {
+			appliedRulesCount: appliedAlerts.length,
+			recentAlertsCount: recentAlerts.length,
+			severity: highestSeverity,
+			lastAlert: recentAlerts.length > 0 ? recentAlerts[0].date : null
+		};
+	}
 };

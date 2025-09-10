@@ -99,6 +99,7 @@
 				data={zoomedData}
 				xScale={scaleBand().padding(0)}
 				x={x}
+				y={y}
 				yNice
 				padding={{
 			 top: 50,
