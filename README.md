@@ -13,7 +13,7 @@ statistics/historical data.
 - **System Services**: Agents track systemctl services allowing you to stream output to the hub
 - **Docker Containers**: Agents track active docker containers as well as individual container information
 - **Alerts**: The hub allows you to setup alerts using various services (email, discord, telegram, etc.) for any metric
-  value
+  value with custom triggers
 
 ## About
 
@@ -30,54 +30,9 @@ The lynx-portal is a small Svelte application that connects to the database for 
 view live data they can connect to an agent websocket to stream commands.
 
 ## Installing the hub
-
-It's recommended to first install and setup the hub before deploying agents\
+It's recommended to first install and setup the hub before deploying agents
 You can do so using two methods:
-
-**Install script**
-> Use this install script to download, build, and deploy the latest version.
-
-  ```bash
-    curl -sL https://raw.githubusercontent.com/colin4683/lynx/refs/heads/master/.gitignore -o ./install-lynx-hub.sh && chmod +x ./install-lynx-hub.sh && ./install-lynx-hub.sh
-  ```
-
-**Build From Source**\
-Clone and build project
-
-  ```bash
-    git clone https://github.com/colin4683/lynx.git && cd lynx/lynx-core && cargo build --release
-  ```
-
-Move binary
-
-  ```bash
-mv ./target/release/lynx-core /usr/bin/
-  ```
-
-Make service file
-
-  ```bash
-  sudo nano /etc/systemd/system/lynx-core.service
-  ```
-
-  ```bash
-[Unit]
-Description=lynx-core
-
-[Service]
-ExecStart=/usr/bin/lynx-core
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-  ```
-
-Enable and start service
-
-```bash
-sudo systemctl enable lynx-core.service
-sudo systemctl start lynx-core.service
-```
+====UNDER CONSTRUCTION====
 
 ## Security
 
