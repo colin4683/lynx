@@ -1,5 +1,9 @@
+use crate::queries::alert_queries;
 use lettre::transport::smtp::response::Severity;
 use log::info;
+use mail_send::mail_builder::MessageBuilder;
+use mail_send::SmtpClientBuilder;
+use mail_send::{Credentials, Error as MailError};
 use regex::Regex;
 use reqwest::Client;
 use sqlx::Row;
@@ -29,7 +33,7 @@ pub struct Condition {
 #[derive(Error, Debug)]
 pub enum NotificationError {
     #[error("Email sending error: {0}")]
-    EmailError(#[from] lettre::transport::smtp::Error),
+    EmailError(#[from] MailError),
     #[error("HTTP request error: {0}")]
     RequestError(#[from] reqwest::Error),
     #[error("Configuration error: {0}")]
@@ -40,6 +44,7 @@ pub enum NotificationService {
     Email(EmailConfig),
     Discord(DiscordConfig),
     Slack(SlackConfig),
+    Error,
 }
 
 pub struct EmailConfig {
@@ -54,6 +59,7 @@ pub struct EmailConfig {
 
 pub struct DiscordConfig {
     pub webhook_url: String,
+    pub username: String,
 }
 
 pub struct SlackConfig {
@@ -63,44 +69,57 @@ pub struct SlackConfig {
 impl NotificationService {
     pub async fn send(&self, message: &str) -> Result<(), NotificationError> {
         match self {
-            NotificationService::Email(_config) => Ok(()),
+            NotificationService::Email(config) => send_email(config, message).await,
             NotificationService::Discord(config) => send_discord(config, message).await,
             NotificationService::Slack(_config) => Ok(()),
+            NotificationService::Error => Err(NotificationError::ConfigError(
+                "Invalid notification service".to_string(),
+            )),
         }
     }
 }
 
 async fn send_discord(config: &DiscordConfig, message: &str) -> Result<(), NotificationError> {
     let client = Client::new();
-    let second_half = config.webhook_url.split("://").nth(1).ok_or_else(|| {
-        NotificationError::ConfigError("Invalid Discord webhook URL format".to_string())
-    })?;
-    let token = second_half.split('@').nth(0).ok_or_else(|| {
-        NotificationError::ConfigError("Invalid Discord webhook URL format".to_string())
-    })?;
-    let third_half = second_half.split('@').nth(1).ok_or_else(|| {
-        NotificationError::ConfigError("Invalid Discord webhook URL format".to_string())
-    })?;
-    let channel_id = third_half.split('?').nth(0).ok_or_else(|| {
-        NotificationError::ConfigError("Invalid Discord webhook URL format".to_string())
-    })?;
-    let username = third_half
-        .split('?')
-        .nth(1)
-        .and_then(|q| q.split('=').nth(1).map(|u| u.replace('+', " ")))
-        .unwrap_or_else(|| "Lynx Monitor".to_string());
-    let webhook_url = format!("https://discord.com/api/webhooks/{}/{}", channel_id, token);
 
-    // build embedded message
+    // build an embedded message
     let payload = serde_json::json!({
-        "username": username,
+        "username": &config.username,
         "embeds": [{
             "title": "Lynx Monitor Alert",
             "description": message,
             "color": 16711680
         }]
     });
-    let res = client.post(&webhook_url).json(&payload).send().await?;
+    let res = client
+        .post(&config.webhook_url)
+        .json(&payload)
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+async fn send_email(config: &EmailConfig, message: &str) -> Result<(), NotificationError> {
+    let message = MessageBuilder::new()
+        .from(config.from_email.clone())
+        .to(config.to_email.clone())
+        .subject(config.subject.clone())
+        .text_body(message.to_string());
+
+    let crednetials = Credentials::Plain {
+        username: &config.username,
+        secret: &config.password,
+    };
+
+    SmtpClientBuilder::new(&config.smtp_server, config.smtp_port)
+        .implicit_tls(false)
+        .credentials(crednetials)
+        .connect()
+        .await
+        .unwrap()
+        .send(message)
+        .await?;
 
     Ok(())
 }
@@ -110,43 +129,23 @@ pub async fn process_notification(
     system_id: i32,
     pool: &sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let alerts = sqlx::query(
-        r#"
-SELECT rule_id
-FROM alert_systems
-WHERE system_id = $1
-"#,
-    )
-    .bind(system_id)
-    .fetch_all(pool)
-    .await?;
+    let alerts = sqlx::query(alert_queries::GET_ALERT_SYSTEMS)
+        .bind(system_id)
+        .fetch_all(pool)
+        .await?;
 
     let mut rules = Vec::new();
     for alert in alerts {
         let id_i32: i32 = alert.get("rule_id");
-        let row = sqlx::query(
-            r#"
-SELECT id, name, description, active, expression, severity
-FROM alert_rules
-WHERE id=$1
-AND active = true
-"#,
-        )
-        .bind(id_i32)
-        .fetch_one(pool)
-        .await?;
+        let row = sqlx::query(alert_queries::GET_ALERT_RULES)
+            .bind(id_i32)
+            .fetch_one(pool)
+            .await?;
 
-        let notifiers = sqlx::query(
-            r#"
-SELECT rule_id, notifier_id
-FROM alert_notifiers
-WHERE
-rule_id = $1
-"#,
-        )
-        .bind(id_i32)
-        .fetch_all(pool)
-        .await?;
+        let notifiers = sqlx::query(alert_queries::GET_ALERT_NOTIFIERS)
+            .bind(id_i32)
+            .fetch_all(pool)
+            .await?;
 
         let id: i32 = row.get("id");
         let name: String = row.get("name");
@@ -189,16 +188,10 @@ rule_id = $1
 
             for notifier in &notifiers {
                 let notifier_id: i32 = notifier.get("notifier_id");
-                let notifier_row = sqlx::query(
-                    r#"
-SELECT id, type, value
-FROM notifiers
-WHERE id = $1
-"#,
-                )
-                .bind(notifier_id)
-                .fetch_one(pool)
-                .await?;
+                let notifier_row = sqlx::query(alert_queries::GET_NOTIFIERS)
+                    .bind(notifier_id)
+                    .fetch_one(pool)
+                    .await?;
 
                 let notifier_type: String = notifier_row.get("type");
                 let notifier_value: String = notifier_row.get("value");
@@ -263,6 +256,21 @@ WHERE id = $1
             }
         }
         if conditions_met {
+            let existing_alert = sqlx::query(alert_queries::GET_EXISTING_ALERT)
+                .bind(system_id)
+                .bind(rule.id.parse::<i32>()?)
+                .fetch_optional(pool)
+                .await?;
+
+            if let Some(_) = existing_alert {
+                continue;
+            }
+
+            sqlx::query(alert_queries::INSERT_ALERT_HISTORY)
+                .bind(system_id)
+                .bind(rule.id.parse::<i32>()?)
+                .execute(pool)
+                .await?;
             for action in &rule.actions {
                 let parts: Vec<&str> = action.splitn(2, ':').collect();
                 if parts.len() != 2 {
@@ -270,18 +278,95 @@ WHERE id = $1
                 }
                 let notifier_type = parts[0];
                 let notifier_value = parts[1];
-
-                let service = match notifier_type {
-                    "Discord" => NotificationService::Discord(DiscordConfig {
-                        webhook_url: notifier_value.to_string(),
-                    }),
+                let notifier_value = urlencoding::decode(notifier_value)
+                    .map_err(|_| {
+                        NotificationError::ConfigError(
+                            "Failed to decode notifier value".to_string(),
+                        )
+                    })?
+                    .to_string();
+                let notify_type = notifier_value.split("://").nth(0).ok_or_else(|| {
+                    NotificationError::ConfigError("Invalid notifier URL format".to_string())
+                })?;
+                let mut message = String::new();
+                let service = match notify_type {
+                    "discord" => {
+                        let second_half = notifier_value.split("://").nth(1).ok_or_else(|| {
+                            NotificationError::ConfigError(
+                                "Invalid Discord webhook URL format".to_string(),
+                            )
+                        })?;
+                        let token = second_half.split('@').nth(0).ok_or_else(|| {
+                            NotificationError::ConfigError(
+                                "Invalid Discord webhook URL format".to_string(),
+                            )
+                        })?;
+                        let third_half = second_half.split('@').nth(1).ok_or_else(|| {
+                            NotificationError::ConfigError(
+                                "Invalid Discord webhook URL format".to_string(),
+                            )
+                        })?;
+                        let channel_id = third_half.split('?').nth(0).ok_or_else(|| {
+                            NotificationError::ConfigError(
+                                "Invalid Discord webhook URL format".to_string(),
+                            )
+                        })?;
+                        let username = third_half
+                            .split('?')
+                            .nth(1)
+                            .and_then(|q| q.split('=').nth(1).map(|u| u.replace('+', " ")))
+                            .unwrap_or_else(|| "Lynx Monitor".to_string());
+                        let webhook_url =
+                            format!("https://discord.com/api/webhooks/{}/{}", channel_id, token);
+                        message = format!(
+                            "```Alert: {}```\n```Description: {}```\n```Expression: {}```\n```Condition met on system ID {}```",
+                            rule.name, rule.description, rule.expression, system_id
+                        );
+                        NotificationService::Discord(DiscordConfig {
+                            webhook_url,
+                            username,
+                        })
+                    }
+                    "smtp" => {
+                        info!(
+                            "Preparing to send email notification for rule {}",
+                            rule.name
+                        );
+                        let re = Regex::new(
+                            r"^smtp://([^:]+):([^@]+)@([^:]+):(\d+)\?from=([^&]+)&to=(.+)$",
+                        )
+                        .unwrap();
+                        if let Some(caps) = re.captures(notifier_value.as_str()) {
+                            let username = caps.get(1).unwrap().as_str().to_string();
+                            let password = caps.get(2).unwrap().as_str().to_string();
+                            let smtp_server = caps.get(3).unwrap().as_str().to_string();
+                            let smtp_port =
+                                caps.get(4).unwrap().as_str().parse::<u16>().map_err(|_| {
+                                    NotificationError::ConfigError(
+                                        "Invalid SMTP port number".to_string(),
+                                    )
+                                })?;
+                            let from_email = caps.get(5).unwrap().as_str().to_string();
+                            let to_email = caps.get(6).unwrap().as_str().to_string();
+                            message = format!(
+                                "Alert: {}\nDescription: {}\nExpression: {}\nCondition met on system ID {}",
+                                rule.name, rule.description, rule.expression, system_id
+                            );
+                            NotificationService::Email(EmailConfig {
+                                smtp_server,
+                                smtp_port,
+                                username,
+                                password,
+                                from_email,
+                                to_email,
+                                subject: format!("Lynx Alert: {}", rule.name),
+                            })
+                        } else {
+                            NotificationService::Error
+                        }
+                    }
                     _ => continue,
                 };
-
-                let message = format!(
-                    "```Alert: {}```\n```Description: {}```\nExpression: {}```\n```Condition met on system ID {}```",
-                    rule.name, rule.description, rule.expression, system_id
-                );
 
                 if let Err(e) = service.send(&message).await {
                     eprintln!("Failed to send notification: {}", e);
@@ -289,17 +374,6 @@ WHERE id = $1
                     info!("Notification sent via {}", notifier_type);
                 }
             }
-            // insert into alert_history (system, alert, date)
-            sqlx::query(
-                r#"
-INSERT INTO alert_history (system, alert, date)
-VALUES ($1, $2, NOW())
-"#,
-            )
-            .bind(system_id)
-            .bind(rule.id.parse::<i32>()?)
-            .execute(pool)
-            .await?;
         }
     }
 
