@@ -283,6 +283,69 @@ pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::e
                                 ))));
                             });
                         }
+                        Ok(WsMessage::StartService { service_name }) => {
+                            let systemctl = systemctl::SystemCtl::default();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                match systemctl.start(&service_name) {
+                                    Ok(_) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!("Started service: {}", service_name),
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!(
+                                                "Failed to start service {}: {}",
+                                                service_name, e
+                                            ),
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        Ok(WsMessage::StopService { service_name }) => {
+                            let systemctl = systemctl::SystemCtl::default();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                match systemctl.stop(&service_name) {
+                                    Ok(_) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!("Stopped service: {}", service_name),
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!(
+                                                "Failed to stop service {}: {}",
+                                                service_name, e
+                                            ),
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        Ok(WsMessage::RestartService { service_name }) => {
+                            let systemctl = systemctl::SystemCtl::default();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                match systemctl.restart(&service_name) {
+                                    Ok(status) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!("Restarted service: {}", status),
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                            format!(
+                                                "Failed to restart service {}: {}",
+                                                service_name, e
+                                            ),
+                                        )));
+                                    }
+                                }
+                            });
+                        }
                         Ok(WsMessage::EOF) | Err(_) | _ => {
                             let peers_thread = peers_clone.clone();
                             tokio::spawn(async move {
