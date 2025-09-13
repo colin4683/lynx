@@ -6,6 +6,8 @@ mod proto;
 mod services;
 mod tls; // added cache module
 
+mod queries;
+
 use crate::cache::Cache;
 use crate::proto::monitor::system_monitor_server::SystemMonitorServer;
 use crate::services::monitor::MyMonitor;
@@ -83,6 +85,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[hub] gRPC server starting on https://{addr}");
 
     if let Err(e) = tonic::transport::Server::builder()
+        .tcp_keepalive(Some(Duration::from_secs(30)))
+        .http2_keepalive_interval(Some(Duration::from_secs(15)))
+        .http2_keepalive_timeout(Some(Duration::from_secs(5)))
         .tls_config(server_tls_config)?
         .add_service(SystemMonitorServer::new(monitor))
         .serve(addr)
