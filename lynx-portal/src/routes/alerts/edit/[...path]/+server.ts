@@ -27,6 +27,7 @@ export const POST: RequestHandler = async (event: RequestEvent) => {
 	const expression = body.expression as string | null;
 	const severity = body.severity as string | null;
 	const notifiers = body.notifiers as number[] ?? [];
+	const active = body.active as boolean ?? false;
 	if (!name || !expression || !severity) {
 		return new Response("Name, expression and severity are required", {
 			status: 400,
@@ -53,9 +54,13 @@ export const POST: RequestHandler = async (event: RequestEvent) => {
 		description: description,
 		expression,
 		severity,
-		updated: new Date().toISOString()
+		updated: new Date().toISOString(),
+		active
 	}).where(eq(alertRules.id, alert.id));
 
+
+	// clear existing notifiers
+	await db.delete(alertNotifiers).where(eq(alertNotifiers.ruleId, alert.id));
 
 	for (const notifierId of notifiers) {
 		const existing = await db.query.alertNotifiers.findFirst({
