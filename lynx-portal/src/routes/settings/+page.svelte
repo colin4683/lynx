@@ -4,6 +4,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Label } from "$lib/components/ui/label";
 	import { Switch } from "$lib/components/ui/switch";
+	import { toast } from 'svelte-sonner';
 
 	let { data } = $props();
 
@@ -46,7 +47,7 @@
 	let telegramChats = $state('');
 
 	// Derived Shoutrrr URLs for each notification type
-	const emailUrl = $derived(() => {
+	const emailUrl = $derived.by(() => {
 		if (!emailEnabled || !smtpUsername || !smtpPassword || !smtpHost || !emailFrom || !emailTo) {
 			return '';
 		}
@@ -56,7 +57,7 @@
 		return url.toString();
 	});
 
-	const slackUrl = $derived(() => {
+	const slackUrl = $derived.by(() => {
 		if (!slackEnabled || !slackTokenA || !slackTokenB || !slackTokenC) {
 			return '';
 		}
@@ -64,7 +65,7 @@
 		return `slack://${botPrefix}${slackTokenA}/${slackTokenB}/${slackTokenC}`;
 	});
 
-	const discordUrl = $derived(() => {
+	const discordUrl = $derived.by(() => {
 		if (!discordEnabled || !discordToken || !discordChannelId) {
 			return '';
 		}
@@ -75,7 +76,7 @@
 		return url.toString();
 	});
 
-	const telegramUrl = $derived(() => {
+	const telegramUrl = $derived.by(() => {
 		if (!telegramEnabled || !telegramToken || !telegramChats) {
 			return '';
 		}
@@ -231,7 +232,22 @@
 			notifications.push({ type: 'telegram', url: telegramUrl });
 		}
 
-		console.log('Saving notification settings:', notifications);
+		fetch("/settings", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify({ notifiers: notifications })
+		}).then(response => {
+			if (response.ok) {
+				toast.success("Notification settings saved successfully.");
+			} else {
+				toast.error("Failed to save notification settings.");
+			}
+		}).catch(error => {
+			console.error("Error saving notification settings:", error);
+			toast.error("An error occurred while saving notification settings.");
+		})
 	}
 
 	function saveAlertSettings() {
@@ -330,30 +346,6 @@
 									<div class="grid grid-cols-1  gap-4">
 										<Card>
 											<CardHeader>
-												<CardTitle>Change Password</CardTitle>
-												<CardDescription>Update your account password</CardDescription>
-											</CardHeader>
-											<CardContent class="space-y-3">
-												<div>
-													<Label for="current-password">Current Password</Label>
-													<Input id="current-password" type="password" bind:value={currentPassword} />
-												</div>
-												<div>
-													<Label for="new-password">New Password</Label>
-													<Input id="new-password" type="password" bind:value={newPassword} />
-												</div>
-												<div>
-													<Label for="confirm-password">Confirm New Password</Label>
-													<Input id="confirm-password" type="password" bind:value={confirmPassword} />
-												</div>
-											</CardContent>
-											<CardFooter>
-												<Button onclick={saveAccountSettings}>Update Password</Button>
-											</CardFooter>
-										</Card>
-
-										<Card>
-											<CardHeader>
 												<CardTitle>Account Information</CardTitle>
 												<CardDescription>View your account details</CardDescription>
 											</CardHeader>
@@ -379,23 +371,30 @@
 												</div>
 											</CardContent>
 										</Card>
-									</div>
-
-									<Card>
-										<CardHeader>
-											<CardTitle>Two-Factor Authentication</CardTitle>
-											<CardDescription>Secure your account with 2FA</CardDescription>
-										</CardHeader>
-										<CardContent>
-											<div class="flex items-center justify-between">
+										<Card>
+											<CardHeader>
+												<CardTitle>Change Password</CardTitle>
+												<CardDescription>Update your account password</CardDescription>
+											</CardHeader>
+											<CardContent class="space-y-3">
 												<div>
-													<div class="font-medium">Enable Two-Factor Authentication</div>
-													<div class="text-sm text-muted-foreground">Add an extra layer of security to your account</div>
+													<Label for="current-password">Current Password</Label>
+													<Input id="current-password" type="password" bind:value={currentPassword} />
 												</div>
-												<Switch bind:checked={enableTwoFactor} />
-											</div>
-										</CardContent>
-									</Card>
+												<div>
+													<Label for="new-password">New Password</Label>
+													<Input id="new-password" type="password" bind:value={newPassword} />
+												</div>
+												<div>
+													<Label for="confirm-password">Confirm New Password</Label>
+													<Input id="confirm-password" type="password" bind:value={confirmPassword} />
+												</div>
+											</CardContent>
+											<CardFooter>
+												<Button onclick={saveAccountSettings}>Update Password</Button>
+											</CardFooter>
+										</Card>
+									</div>
 								</div>
 
 

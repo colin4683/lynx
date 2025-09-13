@@ -90,6 +90,7 @@
 	let rules = $state(originalRules as Expression[]);
 	let fieldValue = $state('');
 	let operatorValue = $state('');
+	let ruleEnabled = $state(rule.active ?? false);
 	let valueValue = $state('');
 	let editor = $state('builder');
 	let ruleName = $state(rule.name);
@@ -109,12 +110,6 @@
 		valid = !!rawExpression.length;
 	});
 
-	function handleAddServer(system: any) {
-		// add to originalServers if not already present
-		if (!originalServers.find((s) => s.id === system.id)) {
-			originalServers = [...originalServers, system];
-		}
-	}
 
 	function sendForm() {
 		// submit post form
@@ -126,6 +121,7 @@
 				severity: 'low',
 				expression: rawExpression,
 				notifiers: Array.from(selectedNotifierIds),
+				active: ruleEnabled,
 			}),
 			headers: {
 				'Content-Type': 'application/json'
@@ -138,6 +134,7 @@
 				} else {
 					toast.error(`Failed to create alert rule: ${ruleName}`);
 				}
+				rules = originalRules;
 			})
 			.catch((error) => {
 				toast.error('Error creating alert rule', {
@@ -157,9 +154,13 @@
 			</button>
 		</div>
 		<h1 class="text-2xl font-bold">{rule.name}</h1>
-		<p class="text-muted-foreground text-sm">Edit expressions to create complex alert rules.</p>
-		<Switch checked={true} />
-		<span class="text-muted-foreground text-sm">Enable Rule</span>
+		<p class="text-muted-foreground text-sm">Edit parameters for alert rule.</p>
+		<div class="flex items-center align-middle gap-2 mt-4">
+			<Label for="rule-enable" class="text-white text-lg">Enable Rule </Label>
+			<Switch id='rule-enable' checked={ruleEnabled} onCheckedChange={(value) => {
+				ruleEnabled = value;
+			}} />
+		</div>
 	</div>
 
 	<div class="mt-4 flex w-full items-center gap-2">
@@ -247,7 +248,6 @@
 				>
 					<div class="flex items-center gap-2">
 						<Input
-							disabled
 							type="text"
 							bind:value={rule.field}
 							placeholder="Field"
@@ -269,7 +269,6 @@
 							</Select.Content>
 						</Select.Root>
 						<Input
-							disabled
 							type="text"
 							bind:value={rule.value}
 							placeholder="Value"
