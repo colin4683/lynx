@@ -1,4 +1,3 @@
-use crate::lib::cache::FastCache;
 use crate::proto::monitor::{
     Component, CpuStats, DiskStats, LoadAverage, MemoryStats, MetricsRequest, NetworkStats,
     SystemInfoRequest, SystemctlRequest,
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use std::str::FromStr;
 use sysinfo::{Components, Networks, System};
-use systemctl::ActiveState;
+use systemctl::{ActiveState, UnitService};
 #[cfg(not(target_os = "windows"))]
 use systemstat::Platform;
 
@@ -81,7 +80,7 @@ pub async fn collect_system_info(system: &mut System) -> SystemInfoRequest {
     }
 }
 
-pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
+pub async fn collect_systemctl_services() -> SystemctlRequest {
     let systemctl = systemctl::SystemCtl::default();
     let units = systemctl.list_units_full(Some("service"), None, None);
     let mut changed_services = vec![];
@@ -110,7 +109,7 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                     memory_usage: memory,
                 };
                 // Check cache
-                let cached = cache
+                /* let cached = cache
                     .get_system_service(&unit.unit_name)
                     .await
                     .unwrap_or(None);
@@ -120,7 +119,7 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
                         .set_system_service(&service, Some(chrono::Duration::minutes(10)))
                         .await;
                     changed_services.push(unit.clone());
-                }
+                }*/
             }
         }
         Err(e) => {
@@ -130,7 +129,7 @@ pub async fn collect_systemctl_services(cache: &FastCache) -> SystemctlRequest {
 
     let services = changed_services
         .into_iter()
-        .map(|unit| {
+        .map(|unit: UnitService| {
             let unit_props = systemctl.create_unit(&unit.unit_name).ok();
             crate::proto::monitor::SystemService {
                 service_name: unit.unit_name.clone(),

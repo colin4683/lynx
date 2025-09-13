@@ -13,10 +13,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
-use tonic::Status;
+use tonic::{Code, Status};
 
 type Tx = UnboundedSender<Message>;
 
@@ -71,21 +72,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Connecting to lynx-hub at {}", config.core.server_url);
 
-    // Connect to gRPC server with mTLS
-    let channel = tonic::transport::Channel::from_shared(config.core.server_url)?
-        .tls_config(client_tls_config)?
-        .connect()
-        .await?;
+    let mut make_client = |config: &LynxConfig,
+                           tls: tonic::transport::ClientTlsConfig|
+     -> Result<tonic::transport::Endpoint, Box<dyn std::error::Error>> {
+        let endpoint = tonic::transport::Endpoint::from_shared(config.core.server_url.clone())?
+            .tls_config(tls)?
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            .http2_keep_alive_interval(Duration::from_secs(15))
+            .keep_alive_timeout(Duration::from_secs(5))
+            .keep_alive_while_idle(true)
+            .connect_timeout(Duration::from_secs(10));
+        Ok(endpoint)
+    };
 
+    // Connect to gRPC server with mTLS
+    let endpoint = make_client(&config, client_tls_config.clone())?;
+    let channel = endpoint.connect().await?;
     let mut client = SystemMonitorClient::with_interceptor(
         channel,
         AuthInterceptor {
-            agent_key: config.core.agent_key,
+            agent_key: config.core.agent_key.clone(),
         },
     );
+    let rpc_timeout = Duration::from_secs(10);
 
     // Start collectors with async mpsc
-    let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(32);
+    let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(1024);
 
     let mut handles = vec![];
 
@@ -100,22 +112,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handles.push(metric_handle);
 
     // Systemctl collector (Linux only - get systemd services status)
-    let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
+    //let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
     #[cfg(target_os = "linux")]
     {
         info!("[agent] Starting systemctl collector...");
-        let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(
-            tx.clone(),
-            cache.clone(),
-        ));
+        let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(tx.clone()));
         handles.push(systemctl_handle);
 
-        // Cleanup task for the systemctl cache
-        let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
-            cache.clone(),
-            Duration::from_secs(7 * 60),
-        ));
-        handles.push(cache_cleanup_handle);
+        /*// Cleanup task for the systemctl cache
+         let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
+             cache.clone(),
+             Duration::from_secs(7 * 60),
+         ));
+        // handles.push(cache_cleanup_handle);*/
     }
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
@@ -143,60 +152,118 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     lib::collectors::CollectorRequest::sysinfo(system_info) => {
                         info!("[agent] Sending system info to hub...");
                         let request = tonic::Request::new(system_info);
-                        match client.get_system_info(request).await {
-                            Ok(response) => {
+                        // Enforce timeout and reconnect on stall
+                        match timeout(rpc_timeout, client.get_system_info(request)).await {
+                            Ok(Ok(response)) => {
                                 let resp = response.into_inner();
                                 if resp.status == "200" {
                                     info!("[agent] Successfully sent system info to hub");
                                 } else {
-                                    info!(
-                                        "[agent] Failed to send system info to hub: {:?}",
-                                        resp.message
-                                    )
+                                    info!("[agent] Failed to send system info to hub: {:?}", resp.message);
                                 }
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 error!("[agent] Error sending system info: {}", e);
+                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
+                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
+                                    let endpoint = make_client(&config, client_tls_config.clone())?;
+                                    let channel = endpoint.connect().await?;
+                                    client = SystemMonitorClient::with_interceptor(
+                                        channel,
+                                        AuthInterceptor {
+                                            agent_key: config.core.agent_key.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                error!("[agent] Timeout sending system info to hub; reconnecting");
+                                let endpoint = make_client(&config, client_tls_config.clone())?;
+                                let channel = endpoint.connect().await?;
+                                client = SystemMonitorClient::with_interceptor(
+                                    channel,
+                                    AuthInterceptor {
+                                        agent_key: config.core.agent_key.clone(),
+                                    },
+                                );
                             }
                         }
                     }
                     lib::collectors::CollectorRequest::metrics(metrics) => {
                         info!("[agent] Sending metrics to hub...");
                         let request = tonic::Request::new(metrics);
-                        match client.report_metrics(request).await {
-                            Ok(response) => {
+                        match timeout(rpc_timeout, client.report_metrics(request)).await {
+                            Ok(Ok(response)) => {
                                 let resp = response.into_inner();
                                 if resp.status == "200" {
                                     info!("[agent] Successfully sent metrics to hub");
                                 } else {
-                                    info!(
-                                        "[agent] Failed to send metrics to hub: {:?}",
-                                        resp.message
-                                    )
+                                    info!("[agent] Failed to send metrics to hub: {:?}", resp.message);
                                 }
                             }
-                            Err(e) => {
-                                error!("[agent] Error sending metrics to hub: {}", e);
+                            Ok(Err(e)) => {
+                                error!("[agent] Error sending metrics: {}", e);
+                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
+                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
+                                    let endpoint = make_client(&config, client_tls_config.clone())?;
+                                    let channel = endpoint.connect().await?;
+                                    client = SystemMonitorClient::with_interceptor(
+                                        channel,
+                                        AuthInterceptor {
+                                            agent_key: config.core.agent_key.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                error!("[agent] Timeout sending metrics to hub; reconnecting");
+                                let endpoint = make_client(&config, client_tls_config.clone())?;
+                                let channel = endpoint.connect().await?;
+                                client = SystemMonitorClient::with_interceptor(
+                                    channel,
+                                    AuthInterceptor {
+                                        agent_key: config.core.agent_key.clone(),
+                                    },
+                                );
                             }
                         }
                     }
                     lib::collectors::CollectorRequest::sysctl(systemctl) => {
                         info!("[agent] Sending systemctl services to the hub");
                         let request = tonic::Request::new(systemctl);
-                        match client.report_systemctl(request).await {
-                            Ok(response) => {
+                        match timeout(rpc_timeout, client.report_systemctl(request)).await {
+                            Ok(Ok(response)) => {
                                 let resp = response.into_inner();
                                 if resp.status == "200" {
                                     info!("[agent] Successfully sent systemctl services to hub");
                                 } else {
-                                    info!(
-                                        "[agent] Failed to send systemctl services to hub: {:?}",
-                                        resp.message
-                                    )
+                                    info!("[agent] Failed to send systemctl services to hub: {:?}", resp.message);
                                 }
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 error!("[agent] Error sending systemctl services to hub: {}", e);
+                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
+                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
+                                    let endpoint = make_client(&config, client_tls_config.clone())?;
+                                    let channel = endpoint.connect().await?;
+                                    client = SystemMonitorClient::with_interceptor(
+                                        channel,
+                                        AuthInterceptor {
+                                            agent_key: config.core.agent_key.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                error!("[agent] Timeout sending systemctl services to hub; reconnecting");
+                                let endpoint = make_client(&config, client_tls_config.clone())?;
+                                let channel = endpoint.connect().await?;
+                                client = SystemMonitorClient::with_interceptor(
+                                    channel,
+                                    AuthInterceptor {
+                                        agent_key: config.core.agent_key.clone(),
+                                    },
+                                );
                             }
                         }
                     }
