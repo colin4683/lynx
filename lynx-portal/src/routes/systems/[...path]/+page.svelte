@@ -278,7 +278,7 @@
 		return msToNext;
 	}
 
-	function parseTimeSlotToLocalDate(timeSlot) {
+	function parseTimeSlotToLocalDate(timeSlot: any) {
 		// timeSlot: 'YYYY-MM-DD HH:MM:SS'
 		const [datePart, timePart] = timeSlot.split(' ');
 		const [year, month, day] = datePart.split('-').map(Number);
@@ -290,8 +290,10 @@
 		stopPolling(); // Clear any existing intervals/timeouts
 
 		const metricsArr = data.metrics;
-		const lastMetric = metricsArr[data.metrics.length - 1]; // Most recent metric (DESC order)
-		if (!lastMetric || !lastMetric.time_slot) {
+		console.log(metricsArr);
+		const lastMetric = metricsArr[metricsArr.length - 1];
+		console.log(lastMetric);// Most recent metric (DESC order)
+		if (!lastMetric || !lastMetric.latest_original_time) {
 			// fallback: refresh in 1 minute
 			pollTimeout = setTimeout(refreshMetrics, 61000);
 			timeLeft = 61;
@@ -300,7 +302,7 @@
 			}, 1000);
 			return;
 		}
-		const last = parseTimeSlotToLocalDate(String(lastMetric.time_slot));
+		const last = parseTimeSlotToLocalDate(String(lastMetric.latest_original_time));
 		const now = new Date();
 		const nextMetric = new Date(last.getTime() + 61000); // exactly 1 minute after last metric, including seconds
 		let msToNext = nextMetric.getTime() - now.getTime();

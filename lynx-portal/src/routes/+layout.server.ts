@@ -4,6 +4,7 @@ import type { LayoutServerLoadEvent } from './$types';
 
 export async function load(event: LayoutServerLoadEvent) {
 
+	let range = new Date(Date.now() - 1000 * 60 * 30).toISOString(); // 30 minutes ago
 	let data = await db.query.systems.findMany({
 		with: {
 			disks: {
@@ -11,6 +12,11 @@ export async function load(event: LayoutServerLoadEvent) {
 			},
 			metrics: {
 				orderBy: (metrics, {desc}) => desc(metrics.time),
+				limit: 1
+			},
+			alertHistories: {
+				where: (alertHistories, {gte}) => gte(alertHistories.date, range),
+				orderBy: (alertHistories, {desc}) => desc(alertHistories.date),
 				limit: 1
 			}
 		}

@@ -97,12 +97,13 @@ export const load = async ({ params, url, depends }) => {
 				SELECT
 					to_char(
 						to_timestamp(
-							floor(
+							round(
 								extract(epoch from time) / ${intervalSeconds}
 							) * ${intervalSeconds}
 						),
 						'YYYY-MM-DD HH24:MI:SS'
 					) as time_slot,
+					to_char(time, 'YYYY-MM-DD HH24:MI:SS') as original_time,
 					*
 				FROM metrics
 				WHERE
@@ -121,6 +122,7 @@ export const load = async ({ params, url, depends }) => {
 		)
 		SELECT
 			t.time_slot,
+			MAX(t.original_time) as latest_original_time,
 			AVG(cpu_usage) as cpu_total,
 			AVG(memory_used_kb) as used_total,
 			AVG(net_in) as in_total,
@@ -204,13 +206,13 @@ export const load = async ({ params, url, depends }) => {
 			}
 		});
 
-		// Get recent alert history (last 24 hours)
-		const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+		// Get recent alert history (last 30 minutes)
+		const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
 		const recentAlerts = await db.query.alertHistory.findMany({
 			where: (alertHistory, { and, eq, gte }) =>
 				and(
 					eq(alertHistory.system, systemId),
-					gte(alertHistory.date, twentyFourHoursAgo.toISOString())
+					gte(alertHistory.date, thirtyMinutesAgo.toISOString())
 				),
 			with: {
 				alertRule: true
