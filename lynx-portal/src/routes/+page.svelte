@@ -335,10 +335,15 @@
 										</div>
 									</div>
 								</div>
-								<div class="flex items-center gap-2 text-sm text-[var(--text)]/60">
-									<span>CPU: {getMetricValue(system, 'cpu')}%</span>
-									<span>•</span>
-									<span>RAM: {getMetricValue(system, 'memory')}%</span>
+								<div class="flex flex-col gap-2">
+									<div class="font-mono text-sm">
+										<span>Alert: {system.alertHistories[0].alertRule.name}</span>
+									</div>
+									<div class="flex items-center gap-2 font-mono text-sm text-[var(--text)]/60">
+										<span>CPU: {getMetricValue(system, 'cpu').toFixed(0)}%</span>
+										<span>•</span>
+										<span>RAM: {getMetricValue(system, 'memory').toFixed(0)}%</span>
+									</div>
 								</div>
 							</button>
 						{/each}

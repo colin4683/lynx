@@ -21,7 +21,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
 </svelte:head>
 
-<div class="w-full h-full flex flex-col align-middle items-center justify-center p-20 gap-10">
+<div class="w-full h-full flex flex-col align-middle items-center justify-center p-3 sm:p-20 gap-10">
 	<nav class="w-full bg-[var(--foreground)] flex align-middle items-center justify-between p-3  rounded-md border border-[var(--border)]">
 		<div class="flex items-center align-middle gap-10">
 			<h1 class="text-[var(--primary)] text-xl font-bold">Lynx</h1>

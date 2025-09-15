@@ -5,12 +5,13 @@
 	import { getSystemStatus, getMetricValue, type SystemStatus } from '$lib/utils/systemUtils';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
+	import { onMount } from 'svelte';
 
 	const { data } = $props();
 
 	// State management using Svelte 5 runes
 	let searchTerm = $state('');
-	let statusFilter = $state('all'); // 'all', 'online', 'offline', 'error', 'warning', 'maintenance'
+	let statusFilter = $state(["all"]); // 'all', 'online', 'offline', 'error', 'warning', 'maintenance'
 	let viewMode = $state('grid'); // 'grid' or 'table'
 	let sortField = $state('label');
 	let sortDirection = $state('asc');
@@ -54,7 +55,7 @@
 			const matchesSearch = searchTerm === '' || labelMatch || hostnameMatch;
 
 			const systemStatus = getSystemStatus(system);
-			const matchesStatus = statusFilter === 'all' || systemStatus === statusFilter;
+			const matchesStatus = statusFilter.length && statusFilter[0] === 'all' || statusFilter.includes(systemStatus);
 
 			return matchesSearch && matchesStatus;
 		});
@@ -103,7 +104,7 @@
 			acc.total++;
 			acc[status]++;
 			return acc;
-		}, { total: 0, online: 0, offline: 0, error: 0, alert: 0 });
+		}, { total: 0, online: 0, offline: 0, error: 0, warning: 0 });
 
 		return stats;
 	});
@@ -121,6 +122,22 @@
 			}
 		};
 	});
+
+	onMount(() => {
+		// retrieve filters from url params if needed
+		const params = new URLSearchParams(window.location.search);
+		if (params.get('view')) {
+			viewMode = params.get('view') === 'table' ? 'table' : 'grid';
+		}
+		if (params.get('status')) {
+			const status = params.get('status');
+			if (!status) return;
+			const validStatuses = ['all', 'online', 'offline', 'error', 'warning', 'maintenance'];
+			const statusArray = status.split(',').filter(s => validStatuses.includes(s));
+			statusFilter = statusArray.length ? statusArray : ['all'];
+		}
+	})
+
 </script>
 
 <div class="flex flex-col gap-6 w-full px-6 py-4">
@@ -145,8 +162,8 @@
 				<div class="text-sm text-[var(--text)] opacity-70">Errors</div>
 			</div>
 			<div class="text-center">
-				<div class="text-2xl font-bold text-[var(--disk)]">{summaryStats.alert}</div>
-				<div class="text-sm text-[var(--text)] opacity-70">Alerts</div>
+				<div class="text-2xl font-bold text-[var(--disk)]">{summaryStats.warning}</div>
+				<div class="text-sm text-[var(--text)] opacity-70">Warnings</div>
 			</div>
 		</div>
 	</div>
@@ -164,7 +181,7 @@
 						class="w-full pl-10 pr-4 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-[var(--text)] placeholder:text-[var(--text)] placeholder:opacity-50 focus:border-[var(--primary)] focus:outline-none"
 					/>
 				</div>
-				<Select.Root  type="single" bind:value={statusFilter}>
+				<Select.Root  type="multiple" bind:value={statusFilter}>
 					<Select.Trigger class="flex w-[180px] items-center gap-0 align-middle">
 								<span class="flex items-center gap-2">
 									<span class="text-sm">{statusFilter}</span>
@@ -206,9 +223,9 @@
 			<span class="icon-[heroicons--server] w-16 h-16 text-[var(--text)] opacity-30 mx-auto mb-4"></span>
 			<h3 class="text-lg font-medium text-[var(--text)] mb-2">No systems found</h3>
 			<p class="text-[var(--text)] opacity-70 mb-4">
-				{searchTerm || statusFilter !== 'all' ? 'Try adjusting your filters.' : 'Deploy your first agent to get started.'}
+				{searchTerm || statusFilter.includes("all") ? 'Try adjusting your filters.' : 'Deploy your first agent to get started.'}
 			</p>
-			{#if !searchTerm && statusFilter === 'all'}
+			{#if !searchTerm && statusFilter.includes("all")}
 				<button class="bg-[var(--primary)] text-[var(--background)] px-4 py-2 rounded-lg hover:bg-[var(--primary)] hover:opacity-90 transition-opacity font-medium">
 					Add System
 				</button>

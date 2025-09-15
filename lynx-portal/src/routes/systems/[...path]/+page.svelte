@@ -189,7 +189,6 @@
 		return data.metrics.map((metric: any) => {
 			console.log("Metric:", metric);
 			let component_temp_array = metric.components;
-			console.log("Component temperatures array:", component_temp_array);
 			// combine all components into a single object for each time slot
 			let data= {
 				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
@@ -197,7 +196,6 @@
 					(Object.entries(component_temp_array ?? []) ?? []).map(([key, value]) => [(value as any).label, (value as any).avg_temperature])
 				)
 			}
-			console.log("Parsed temperature data point:", data);
 			return data;
 		})
 	})
@@ -518,8 +516,8 @@
 			config={networkChartConfig}
 			data={networkChartData}
 			x="time"
-			y="net_in"
-			format={(d) => `${d.toFixed(2)}mb/s`}
+			y=""
+			format={(d) => `${d.toFixed(2)}kb/s`}
 			onEvent={refreshChart}
 		/>
 	</div>
