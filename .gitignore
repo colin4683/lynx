@@ -18,3 +18,5 @@ certs/
 lynx-core/cache.snapshot
 lynx-agent/agent.log
 lynx-core/core.log
+
+deploy/.env

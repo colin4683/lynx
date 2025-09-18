@@ -43,4 +43,7 @@ lynx-portal.
         - `lynx-agent/certs/agent.crt`
         - `lynx-agent/certs/agent.key`
         - `lynx-agent/certs/ca.crt`
-        
+
+### SQLX Offline mode
+
+cargo sqlx prepare --database-url "postgres://username:password@host:5432/database" 

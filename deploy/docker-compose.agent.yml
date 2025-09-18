@@ -1,0 +1,27 @@
+version: "3.9"
+name: lynx-agent-stack
+
+services:
+  agent:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # for Mac/Windows to access host services
+    build:
+      context: ..
+      dockerfile: lynx-agent/Dockerfile
+    # If you publish an image, replace build with:
+    # image: your-registry/lynx-agent:latest
+    container_name: lynx-agent
+    environment:
+      CORE_GRPC_URL: ${CORE_GRPC_URL?CORE_GRPC_URL is required}   # e.g. https://core.example.com:50051
+      AGENT_TOKEN: ${AGENT_TOKEN:-}                               # optional, if your core requires it
+      AGENT_LABEL: ${AGENT_LABEL:-}                               # optional identifier for this server
+      RUST_LOG: ${RUST_LOG:-info}
+      MY_LOG_LEVEL: info
+      MY_LOG_STYLE: auto
+    volumes:
+      - ../lynx-agent/certs:/app/certs:ro           # optional CA/client certs if TLS/mTLS is used
+      - ../lynx-agent/config.toml:/app/config.toml:ro  # optional agent config
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # optional: enable container metrics
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Websocket endpoint

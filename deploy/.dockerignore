@@ -1,0 +1,8 @@
+lynx-core/target/
+lynx-agent/target/
+lynx-portal/node_modules/
+lynx-portal/build/
+lynx-scripts/lynx-env/
+*.log
+cache.snapshot
+cache.db

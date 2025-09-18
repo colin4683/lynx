@@ -1,0 +1,69 @@
+version: "3.9"
+name: lynx-core-stack
+services:
+  db:
+    image: timescale/timescaledb-ha:pg17
+    container_name: lynx-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db-data:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  core:
+    build:
+      context: ..
+      dockerfile: lynx-core/Dockerfile
+    container_name: lynx-core
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+      RUST_LOG: info
+      MY_LOG_LEVEL: info
+      MY_LOG_STYLE: auto
+      TZ: ${TZ:-UTC}
+      # add other core env as needed, e.g. listen addr, tls paths if your core reads them from env
+    volumes:
+      - ../lynx-core/certs:/app/certs:ro
+      - ../lynx-core/config.toml:/app/config.toml:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "50051:50051"   # gRPC TLS from portal and agents
+    restart: unless-stopped
+
+  portal:
+    build:
+      context: ../lynx-portal
+    container_name: lynx-portal
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      ORIGIN: "http://localhost:3000"
+      # point frontend to the core service name on the Compose network
+      PUBLIC_CORE_GRPC_URL: "https://core:50051"
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+      TZ: ${TZ:-America/New_York}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"   # SvelteKit server
+    restart: unless-stopped
+
+volumes:
+  db-data:
