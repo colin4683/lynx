@@ -17,19 +17,6 @@ export const load = async (event: PageServerLoadEvent) => {
 	if (event.locals.session == null || event.locals.user == null) {
 		return { redirect: "/login" };
 	}
-
-	if (!event.locals.user.emailVerified) {
-		return { redirect: "/verify-email" };
-	}
-
-	if (!event.locals.user.registered2FA) {
-		return { redirect: "/2fa/setup" };
-	}
-
-	if (!event.locals.session.twoFactorVerified) {
-		return { redirect: "/2fa" };
-	}
-
 	const notifiers = await db.query.notifiers.findMany({
 		where: (notifiers, { eq }) => eq(notifiers.user, event.locals.user!.id),
 		orderBy: (notifiers, { desc }) => desc(notifiers.id)
@@ -45,18 +32,6 @@ async function action(event: RequestEvent) {
 	// save new alert rule
 	if (event.locals.session == null || event.locals.user == null) {
 		return redirect(302, "/login");
-	}
-
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
-
-	if (!event.locals.user.registered2FA) {
-		return redirect(302, "/2fa/setup");
-	}
-
-	if (!event.locals.session.twoFactorVerified) {
-		return redirect(302, "/2fa");
 	}
 
 	const formData = await event.request.formData();

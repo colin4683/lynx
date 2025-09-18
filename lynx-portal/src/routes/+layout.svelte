@@ -5,7 +5,7 @@
 	import { onMount } from 'svelte';
 	import { Toaster } from 'svelte-sonner'
 	import AddServer from '$lib/components/AddServer.svelte';
-	let activeTab = $state('');
+	let activeTab = $state('dashboard');
 
 	onMount(() => {
 		// Set the active tab based on the current URL path

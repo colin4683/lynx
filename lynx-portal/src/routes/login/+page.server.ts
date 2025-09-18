@@ -5,9 +5,6 @@ import { createSession, generateSessionToken, type SessionFlags, setSessionCooki
 
 export function load(event: PageServerLoadEvent) {
 	if (event.locals.session != null && event.locals.user != null) {
-		if (!event.locals.user.emailVerified) {
-			return redirect(302, "/verify-email");
-		}
 		if (!event.locals.user.registered2FA) {
 			return redirect(302, "/2fa/setup");
 		}

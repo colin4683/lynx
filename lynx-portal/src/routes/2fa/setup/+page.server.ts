@@ -10,9 +10,6 @@ export async function load(event: RequestEvent) {
 	if (event.locals.session === null || event.locals.user === null) {
 		return redirect(302, "/login");
 	}
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
 
 	const totpKey = new Uint8Array(20);
 	crypto.getRandomValues(totpKey);
@@ -34,9 +31,7 @@ async function action(event: RequestEvent) {
 	if (event.locals.session === null || event.locals.user === null) {
 		return redirect(302, "/login");
 	}
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
+
 
 
 	const formData = await event.request.formData();

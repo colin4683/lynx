@@ -8,18 +8,6 @@ export const POST: RequestHandler = async (event: RequestEvent) => {
 		return redirect(302, "/login");
 	}
 
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
-
-	if (!event.locals.user.registered2FA) {
-		return redirect(302, "/2fa/setup");
-	}
-
-	if (!event.locals.session.twoFactorVerified) {
-		return redirect(302, "/2fa");
-	}
-
 
 	// Parse form body from json
 	const body = await event.request.json();
@@ -56,19 +44,6 @@ export const DELETE: RequestHandler = async (event: RequestEvent) => {
 	if (event.locals.session == null || event.locals.user == null) {
 		return redirect(302, "/login");
 	}
-
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
-
-	if (!event.locals.user.registered2FA) {
-		return redirect(302, "/2fa/setup");
-	}
-
-	if (!event.locals.session.twoFactorVerified) {
-		return redirect(302, "/2fa");
-	}
-
 	const body = await event.request.json();
 	const {id} = body;
 

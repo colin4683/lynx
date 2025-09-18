@@ -41,6 +41,7 @@
 	let editor = $state('builder');
 	let ruleName = $state('');
 	let ruleDescription = $state('');
+	let severity = $state('low');
 	let valid = $state(false);
 	let rawExpression = $derived.by(() => {
 		return rules.length > 0
@@ -63,7 +64,7 @@
 			body: JSON.stringify({
 				name: ruleName,
 				description: ruleDescription,
-				severity: 'low',
+				severity: severity,
 				expression: rawExpression,
 				notifiers: Array.from(selectedNotifierIds)
 			}),
@@ -124,7 +125,22 @@
 			bind:value={ruleDescription}
 		/>
 	</div>
-
+	<div class="mt-4">
+		<Label for="severity">Severity</Label>
+		<Select.Root type="single" bind:value={severity}>
+			<Select.Trigger id="severity" class="flex w-[180px] items-center gap-0 align-middle">
+				<span class="flex items-center gap-2">
+					<span class="text-sm">{severity.charAt(0).toUpperCase() + severity.slice(1)}</span>
+				</span>
+			</Select.Trigger>
+			<Select.Content class="rounded-md border border-[var(--border)] bg-[var(--background)]">
+				<Select.Item value="low">Low</Select.Item>
+				<Select.Item value="medium">Medium</Select.Item>
+				<Select.Item value="high">High</Select.Item>
+				<Select.Item value="critical">Critical</Select.Item>
+			</Select.Content>
+		</Select.Root>
+	</div>
 	<div class="mt-4 flex max-w-[500px] flex-col">
 		<p class="text-muted-foreground mb-5 text-sm">
 			Add conditions to your rule:

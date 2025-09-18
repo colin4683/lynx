@@ -48,6 +48,16 @@
 	let timeLeft = $state(0);
 	let nextTimeslot = $state('');
 
+	let agentOnline = $derived.by(() => {
+		if (!data.system.lastSeen) {
+			return false;
+		}
+		const lastSeen = new Date(data.system.lastSeen);
+		const now = new Date();
+		const diffMinutes = (now.getTime() - lastSeen.getTime()) / 1000 / 60;
+		return diffMinutes <= 5;
+	})
+
 	let interval = $derived.by(() => {
 		switch (range) {
 			case "5 minutes":
@@ -384,8 +394,8 @@
 <div class="w-full bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-[var(--border)]">
 	<div class="w-full relative h-full flex items-center align-middle justify-between">
 		<p class="text-xl font-bold">
+			<span class={`mr-2 w-3.5 h-3.5 inline-block rounded-full border duration-500 animate-pulse ${agentOnline ? 'bg-green-300/60 border-green-400' : 'bg-red-400/60 border-red-400'}`}></span>
 			{data.system.label}
-			<span class={`w-3.5 h-3.5 inline-block rounded-full border animate-pulse ${data.system.active ? 'bg-green-300/60 border-green-400' : 'bg-red-400/60 border-red-400'}`}></span>
 		</p>
 		<div class="flex items-start justify-end gap-3 absolute right-0 -top-1/3">
 			<span class="icon-[fluent--alert-32-regular] text-white/80 hover:text-primary transition-colors active:scale-95 w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/alerts`}></span>

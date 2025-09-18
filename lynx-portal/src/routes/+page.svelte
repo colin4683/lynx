@@ -337,7 +337,7 @@
 								</div>
 								<div class="flex flex-col gap-2">
 									<div class="font-mono text-sm">
-										<span>Alert: {system.alertHistories[0].alertRule.name}</span>
+										<span>Alert: {system.alertHistories[0]?.alertRule?.name ?? "Timed out"}</span>
 									</div>
 									<div class="flex items-center gap-2 font-mono text-sm text-[var(--text)]/60">
 										<span>CPU: {getMetricValue(system, 'cpu').toFixed(0)}%</span>

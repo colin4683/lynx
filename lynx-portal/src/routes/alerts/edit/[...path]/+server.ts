@@ -8,27 +8,16 @@ export const POST: RequestHandler = async (event: RequestEvent) => {
 		return redirect(302, "/login");
 	}
 
-	if (!event.locals.user.emailVerified) {
-		return redirect(302, "/verify-email");
-	}
-
-	if (!event.locals.user.registered2FA) {
-		return redirect(302, "/2fa/setup");
-	}
-
-	if (!event.locals.session.twoFactorVerified) {
-		return redirect(302, "/2fa");
-	}
-
 	// Parse form body from json
 	const body = await event.request.json();
 	const name = body.name as string | null;
+	const originalName = body.originalName as string | null;
 	const description = body.description as string | null;
 	const expression = body.expression as string | null;
 	const severity = body.severity as string | null;
 	const notifiers = body.notifiers as number[] ?? [];
 	const active = body.active as boolean ?? false;
-	if (!name || !expression || !severity) {
+	if (!originalName || !name || !expression || !severity) {
 		return new Response("Name, expression and severity are required", {
 			status: 400,
 			headers: {
@@ -38,7 +27,7 @@ export const POST: RequestHandler = async (event: RequestEvent) => {
 	}
 
 	const alert = await db.query.alertRules.findFirst({
-		where: (alerts, { eq }) => eq(alerts.name, name)
+		where: (alerts, { eq }) => eq(alerts.name, originalName)
 	});
 	if (!alert) {
 		return new Response("Alert not found.", {

@@ -265,6 +265,7 @@
 	function saveAgentSettings() {
 		console.log('Saving agent settings...');
 	}
+
 </script>
 
 <div class="flex flex-col min-h-[600px] w-full max-w-6xl bg-background">
@@ -326,6 +327,13 @@
 					>
 						<span class="icon-[heroicons--cpu-chip] w-4 h-4 inline mr-2"></span>
 						Agents
+					</button>
+					<button
+						class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors bg-red-400/60 border border-red-400 text-red-300 hover:bg-red-400 hover:text-white"
+						onclick={() => window.location.href = '/logout'}
+					>
+						<span class="icon-[heroicons--trash] w-4 h-4 inline mr-2"></span>
+						Logout
 					</button>
 				</nav>
 			</div>
