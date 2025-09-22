@@ -6,8 +6,8 @@ use tonic::{Request, Response, Status};
 use crate::cache::Cache;
 use crate::proto::monitor::system_monitor_server::SystemMonitor;
 use crate::proto::monitor::{
-    MetricsRequest, MetricsResponse, SystemInfoRequest, SystemInfoResponse, SystemctlRequest,
-    SystemctlResponse,
+    GpuMetricsRequest, GpuRequest, GpuResponse, MetricsRequest, MetricsResponse, SystemInfoRequest,
+    SystemInfoResponse, SystemctlRequest, SystemctlResponse,
 };
 
 #[derive(Clone)]
@@ -28,7 +28,6 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<MetricsRequest>,
     ) -> Result<Response<MetricsResponse>, Status> {
-        info!("[hub] New metrics request");
         let agent_key = request
             .metadata()
             .get("x-agent-key")
@@ -154,7 +153,6 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<SystemInfoRequest>,
     ) -> Result<Response<SystemInfoResponse>, Status> {
-        info!("[hub] New system info request");
         let agent_key = request
             .metadata()
             .get("x-agent-key")
@@ -218,11 +216,192 @@ impl SystemMonitor for MyMonitor {
         }))
     }
 
+    async fn register_gp_us(
+        &self,
+        request: Request<GpuRequest>,
+    ) -> Result<Response<GpuResponse>, Status> {
+        let agent_key = request
+            .metadata()
+            .get("x-agent-key")
+            .ok_or(Status::unauthenticated("Missing key"))?
+            .to_str()
+            .map_err(|e| {
+                error!("[hub] Authorization failed for agent: {e:?}");
+                Status::invalid_argument("Invalid key")
+            })?;
+
+        let valid = sqlx::query!(
+            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
+            agent_key
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
+            Status::internal(format!("Database error: {}", e))
+        })?;
+
+        if valid.is_none() {
+            error!("[hub] No system info found for agent key: {:?}", agent_key);
+            return Err(Status::unauthenticated("Invalid or inactive agent key"));
+        }
+
+        let system = valid.unwrap();
+        let request = request.into_inner();
+
+        for gpu in request.gpus {
+            let existing = sqlx::query!(
+                r#"SELECT id FROM gpus WHERE system_id = $1 AND gpu_index = $2"#,
+                system.id,
+                gpu.gpu_index as i32
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                error!("[hub] Failed to query existing GPU: {e:?}");
+                Status::internal("Database error")
+            })?;
+
+            if let Some(existing_gpu) = existing {
+                // update existing GPU
+                sqlx::query!(
+                    r#"
+                    UPDATE gpus
+                    SET name = $1,
+                        pci_bus = $2,
+                        memory_total_mb = $3,
+                        driver = $4
+                    WHERE id = $5
+                    "#,
+                    gpu.name,
+                    gpu.pci_bus,
+                    gpu.memory_total_mb as i32,
+                    gpu.driver,
+                    existing_gpu.id
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    error!("[hub] Failed to update GPU: {e:?}");
+                    Status::internal("Database error")
+                })?;
+                continue;
+            } else {
+                sqlx::query!(
+                    r#"
+                    INSERT INTO gpus (system_id, gpu_index, uuid, name, pci_bus, memory_total_mb, driver)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    "#,
+                    system.id,
+                    gpu.gpu_index as i32,
+                    gpu.uuid,
+                    gpu.name,
+                    gpu.pci_bus,
+                    gpu.memory_total_mb as i32,
+                    gpu.driver
+                )
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    error!("[hub] Failed to insert GPU: {e:?}");
+                    Status::internal("Database error")
+                })?;
+            }
+        }
+
+        info!("[hub] GPU list updated successfully");
+
+        Ok(Response::new(GpuResponse {
+            status: "200".to_string(),
+            message: "GPUs reported successfully".to_string(),
+        }))
+    }
+
+    async fn report_gpu_metrics(
+        &self,
+        request: Request<GpuMetricsRequest>,
+    ) -> Result<Response<GpuResponse>, Status> {
+        let agent_key = request
+            .metadata()
+            .get("x-agent-key")
+            .ok_or(Status::unauthenticated("Missing key"))?
+            .to_str()
+            .map_err(|e| {
+                error!("[hub] Authorization failed for agent: {e:?}");
+                Status::invalid_argument("Invalid key")
+            })?;
+
+        let valid = sqlx::query!(
+            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
+            agent_key
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
+            Status::internal(format!("Database error: {}", e))
+        })?;
+
+        if valid.is_none() {
+            error!("[hub] No system info found for agent key: {:?}", agent_key);
+            return Err(Status::unauthenticated("Invalid or inactive agent key"));
+        }
+
+        let system = valid.unwrap();
+        let request = request.into_inner();
+
+        for metric in request.gpu_metrics {
+            let gpu = sqlx::query!(
+                r#"SELECT id FROM gpus WHERE system_id = $1 AND gpu_index = $2"#,
+                system.id,
+                metric.gpu_index as i32
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                error!("[hub] Failed to query GPU for metrics: {e:?}");
+                Status::internal("Database error")
+            })?;
+
+            if gpu.is_none() {
+                error!(
+                    "[hub] No GPU found for system {} with index {}",
+                    system.id, metric.gpu_index
+                );
+                continue;
+            }
+            let gpu = gpu.unwrap();
+
+            sqlx::query!(
+                r#"
+                INSERT INTO gpu_metrics (time, gpu_id, temperature, memory_used_mb, utilization, power)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                "#,
+                Utc::now(),
+                gpu.id,
+                metric.temperature,
+                metric.memory_used_mb as i32,
+                metric.utilization,
+                metric.power
+            )
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    error!("[hub] Failed to insert GPU metric: {e:?}");
+                    Status::internal("Database error")
+                })?;
+        }
+        info!("[hub] GPU metrics updated successfully");
+        Ok(Response::new(GpuResponse {
+            status: "200".to_string(),
+            message: "GPU metrics reported successfully".to_string(),
+        }))
+    }
+
     async fn report_systemctl(
         &self,
         request: Request<SystemctlRequest>,
     ) -> Result<Response<SystemctlResponse>, Status> {
-        info!("[hub] New system info request");
         let agent_key = request
             .metadata()
             .get("x-agent-key")

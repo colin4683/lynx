@@ -78,6 +78,33 @@ CREATE TABLE "metrics"
 );
 SELECT create_hypertable('metrics', 'time', if_not_exists => true);
 
+CREATE TABLE "gpus"
+(
+    "id"              integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    "system_id"       integer NOT NULL,
+    "gpu_index"       integer NOT NULL, -- index as reported by vendor (0,1,..)
+    "uuid"            text,             -- vendor UUID if available
+    "name"            text,
+    "pci_bus"         text,
+    "memory_total_mb" integer,
+    "driver"          text,
+    "created_at"      timestamp with time zone DEFAULT now(),
+    CONSTRAINT gpus_system_idx_unique UNIQUE ("system_id", "gpu_index"),
+    CONSTRAINT gpus_system_fk FOREIGN KEY ("system_id") REFERENCES "public"."systems" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE "gpu_metrics"
+(
+    "time"           timestamp NOT NULL,
+    "gpu_id"         integer   NOT NULL,
+    "temperature"    double precision,
+    "memory_used_mb" bigint,
+    "utilization"    double precision,
+    "power"          double precision
+);
+
+SELECT create_hypertable('gpu_metrics', 'time', if_not_exists => true);
+
 CREATE TABLE "notifiers"
 (
     "id"    integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
@@ -192,6 +219,12 @@ ALTER TABLE "systems"
     ADD CONSTRAINT "systems_users_id_fk" FOREIGN KEY ("admin") REFERENCES "public"."users" ("id") ON DELETE cascade ON UPDATE cascade;
 
 CREATE INDEX "alert_systems_system_id_index" ON "alert_systems" USING btree ("system_id" int4_ops);
+
+
+CREATE INDEX IF NOT EXISTS "gpus_system_id_idx" ON "gpus" ("system_id");
+CREATE INDEX IF NOT EXISTS "gpu_metrics_time_gpu_idx" ON "gpu_metrics" USING btree ("time", "gpu_id");
+ALTER TABLE "gpu_metrics"
+    ADD CONSTRAINT gpu_metrics_gpu_id_fk FOREIGN KEY ("gpu_id") REFERENCES "public"."gpus" ("id") ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS "metrics_time_idx"
     ON "metrics" USING btree ("time" timestamptz_ops);

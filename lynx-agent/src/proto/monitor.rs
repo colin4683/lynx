@@ -30,6 +30,16 @@ pub struct MetricsRequest {
     pub load_average: ::core::option::Option<LoadAverage>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GpuRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub gpus: ::prost::alloc::vec::Vec<GpuInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GpuMetricsRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub gpu_metrics: ::prost::alloc::vec::Vec<GpuMetrics>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemctlRequest {
     #[prost(message, repeated, tag = "1")]
     pub services: ::prost::alloc::vec::Vec<SystemService>,
@@ -51,6 +61,13 @@ pub struct SystemService {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemctlResponse {
+    #[prost(string, tag = "1")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GpuResponse {
     #[prost(string, tag = "1")]
     pub status: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
@@ -123,6 +140,34 @@ pub struct SystemInfoResponse {
     pub status: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct GpuMetrics {
+    #[prost(uint32, tag = "1")]
+    pub gpu_index: u32,
+    #[prost(double, tag = "2")]
+    pub utilization: f64,
+    #[prost(uint64, tag = "3")]
+    pub memory_used_mb: u64,
+    #[prost(double, tag = "4")]
+    pub temperature: f64,
+    #[prost(double, tag = "5")]
+    pub power: f64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GpuInfo {
+    #[prost(uint32, tag = "1")]
+    pub gpu_index: u32,
+    #[prost(string, tag = "2")]
+    pub uuid: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub pci_bus: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub driver: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "6")]
+    pub memory_total_mb: u64,
 }
 /// Generated client implementations.
 pub mod system_monitor_client {
@@ -237,6 +282,48 @@ pub mod system_monitor_client {
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportMetrics"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn register_gp_us(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GpuRequest>,
+        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/RegisterGPUs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "RegisterGPUs"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn report_gpu_metrics(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GpuMetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/ReportGPUMetrics",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportGPUMetrics"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_system_info(

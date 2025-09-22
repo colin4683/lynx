@@ -72,8 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Connecting to lynx-hub at {}", config.core.server_url);
 
-    let mut make_client = |config: &LynxConfig,
-                           tls: tonic::transport::ClientTlsConfig|
+    let make_client = |config: &LynxConfig,
+                       tls: tonic::transport::ClientTlsConfig|
      -> Result<tonic::transport::Endpoint, Box<dyn std::error::Error>> {
         let endpoint = tonic::transport::Endpoint::from_shared(config.core.server_url.clone())?
             .tls_config(tls)?
@@ -99,33 +99,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start collectors with async mpsc
     let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(1024);
 
+    lib::collectors::start_collectors(tx.clone()).await;
+
     let mut handles = vec![];
 
-    // System info collector (cpu model, users, kernal, os,etc.)
-    info!("[agent] Starting sysinfo collector...");
-    let sysinfo_handle = tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
-    handles.push(sysinfo_handle);
-
-    // Metric collector (cpu usage, memory usage, disk usage, etc.)
-    info!("[agent] Starting metric collector...");
-    let metric_handle = tokio::spawn(lib::collectors::metric_collector(tx.clone()));
-    handles.push(metric_handle);
-
-    // Systemctl collector (Linux only - get systemd services status)
-    //let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
-    #[cfg(target_os = "linux")]
-    {
-        info!("[agent] Starting systemctl collector...");
-        let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(tx.clone()));
-        handles.push(systemctl_handle);
-
-        /*// Cleanup task for the systemctl cache
-         let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
-             cache.clone(),
-             Duration::from_secs(7 * 60),
-         ));
-        // handles.push(cache_cleanup_handle);*/
-    }
+    // // System info collector (cpu model, users, kernal, os,etc.)
+    // info!("[agent] Starting sysinfo collector...");
+    // let sysinfo_handle = tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
+    // handles.push(sysinfo_handle);
+    //
+    // // Metric collector (cpu usage, memory usage, disk usage, etc.)
+    // info!("[agent] Starting metric collector...");
+    // let metric_handle = tokio::spawn(lib::collectors::metric_collector(tx.clone()));
+    // handles.push(metric_handle);
+    //
+    // // Systemctl collector (Linux only - get systemd services status)
+    // //let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
+    // #[cfg(target_os = "linux")]
+    // {
+    //     info!("[agent] Starting systemctl collector...");
+    //     let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(tx.clone()));
+    //     handles.push(systemctl_handle);
+    //
+    //     /*// Cleanup task for the systemctl cache
+    //      let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
+    //          cache.clone(),
+    //          Duration::from_secs(7 * 60),
+    //      ));
+    //     // handles.push(cache_cleanup_handle);*/
+    // }
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // WebSocket server for real-time updates
@@ -149,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             Some(request) = rx.recv() => {
                 match request {
-                    lib::collectors::CollectorRequest::sysinfo(system_info) => {
+                    lib::collectors::CollectorRequest::SystemInfo(system_info) => {
                         info!("[agent] Sending system info to hub...");
                         let request = tonic::Request::new(system_info);
                         // Enforce timeout and reconnect on stall
@@ -189,7 +191,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    lib::collectors::CollectorRequest::metrics(metrics) => {
+                    lib::collectors::CollectorRequest::GpuInfo(gpu_info) => {
+                        info!("[agent] Sending GPU info to hub...");
+                        let request = tonic::Request::new(gpu_info);
+                        match timeout(rpc_timeout, client.register_gp_us(request)).await {
+                            Ok(Ok(response)) => {
+                                let resp = response.into_inner();
+                                if resp.status == "200" {
+                                    info!("[agent] Successfully sent GPU info to hub");
+                                } else {
+                                    info!("[agent] Failed to send GPU info to hub: {:?}", resp.message);
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                error!("[agent] Error sending GPU info: {}", e);
+                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
+                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
+                                    let endpoint = make_client(&config, client_tls_config.clone())?;
+                                    let channel = endpoint.connect().await?;
+                                    client = SystemMonitorClient::with_interceptor(
+                                        channel,
+                                        AuthInterceptor {
+                                            agent_key: config.core.agent_key.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                error!("[agent] Timeout sending GPU info to hub; reconnecting");
+                                let endpoint = make_client(&config, client_tls_config.clone())?;
+                                let channel = endpoint.connect().await?;
+                                client = SystemMonitorClient::with_interceptor(
+                                    channel,
+                                    AuthInterceptor {
+                                        agent_key: config.core.agent_key.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    lib::collectors::CollectorRequest::GpuMetrics(gpu_metrics) => {
+                        info!("[agent] Sending GPU metrics to hub...");
+                        let request = tonic::Request::new(gpu_metrics);
+                        match timeout(rpc_timeout, client.report_gpu_metrics(request)).await {
+                            Ok(Ok(response)) => {
+                                let resp = response.into_inner();
+                                if resp.status == "200" {
+                                    info!("[agent] Successfully sent GPU metrics to hub");
+                                } else {
+                                    info!("[agent] Failed to send GPU metrics to hub: {:?}", resp.message);
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                error!("[agent] Error sending GPU metrics: {}", e);
+                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
+                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
+                                    let endpoint = make_client(&config, client_tls_config.clone())?;
+                                    let channel = endpoint.connect().await?;
+                                    client = SystemMonitorClient::with_interceptor(
+                                        channel,
+                                        AuthInterceptor {
+                                            agent_key: config.core.agent_key.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                error!("[agent] Timeout sending GPU metrics to hub; reconnecting");
+                                let endpoint = make_client(&config, client_tls_config.clone())?;
+                                let channel = endpoint.connect().await?;
+                                client = SystemMonitorClient::with_interceptor(
+                                    channel,
+                                    AuthInterceptor {
+                                        agent_key: config.core.agent_key.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    lib::collectors::CollectorRequest::Metrics(metrics) => {
                         info!("[agent] Sending metrics to hub...");
                         let request = tonic::Request::new(metrics);
                         match timeout(rpc_timeout, client.report_metrics(request)).await {
@@ -228,7 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    lib::collectors::CollectorRequest::sysctl(systemctl) => {
+                    lib::collectors::CollectorRequest::Systemctl(systemctl) => {
                         info!("[agent] Sending systemctl services to the hub");
                         let request = tonic::Request::new(systemctl);
                         match timeout(rpc_timeout, client.report_systemctl(request)).await {
