@@ -1,6 +1,7 @@
 import {db} from '$lib/server/db';
 import {error} from '@sveltejs/kit';
 import {sql} from 'drizzle-orm';
+import {TZ} from '$env/static/private';
 
 function parseTimeRangeToMs(range: string): number {
     const [value, unit] = range.split(' ');
@@ -77,20 +78,16 @@ export const load = async ({params, url, depends}) => {
             }, // Include metrics if needed
             disks: {
                 where: (disks, {gte}) => gte(disks.time, startTime.toISOString())
-            } // Include disks if needed
+            }, // Include disks if needed,
+						gpuses: true
         }
     });
 
     if (!system) {
         error(404, 'System not found');
     }
-    console.log(
-        `Fetching metrics for system ${system.label} (${system.id}) from ${startTime.toISOString()} to ${endTime.toISOString()} with interval of ${intervalMinutes} minutes`
-    );
-
     // Get the user's local timezone from the browser (if passed as a query param), otherwise use server's default
-    const tz = url.searchParams.get('tz') || process.env.TZ || 'UTC';
-    console.log(tz);
+    const tz = url.searchParams.get('tz') || TZ || 'UTC';
     let metrics;
     metrics = await db.execute(sql`
         WITH time_slots AS (SELECT to_char(
@@ -140,6 +137,44 @@ export const load = async ({params, url, depends}) => {
         ORDER BY t.time_slot ASC
     `);
 
+		// fetch gpu metrics for each gpu in system.gpuses
+		let gpus = [];
+		for (const gpu of system.gpuses) {
+			let gpuMetrics = await db.execute(sql`
+				WITH time_slots AS (SELECT to_char(
+																					 timezone(${tz},
+																										to_timestamp(
+																														round(extract(epoch from time) / ${intervalSeconds}) *
+																														${intervalSeconds}
+																										)
+																					 ),
+																					 'YYYY-MM-DD HH24:MI:SS'
+																	 )                                                       as time_slot,
+																	 to_char(timezone(${tz}, time), 'YYYY-MM-DD HH24:MI:SS') as original_time,
+																	 *
+														FROM gpu_metrics
+														WHERE gpu_id = ${gpu.id}
+															AND
+						time >= ${startTime.toISOString()}
+						AND time <= ${endTime.toISOString()}
+						)
+				SELECT t.time_slot,
+							 MAX(t.original_time)               as latest_original_time,
+							 AVG(temperature)                   as avg_temperature,
+							 AVG(utilization)            				as avg_utilization,
+							 AVG(memory_used_mb)                as avg_memory_used_mb,
+							 AVG(power)                    			as avg_power
+				FROM time_slots t
+				GROUP BY t.time_slot
+				ORDER BY t.time_slot ASC
+		`);
+			gpus.push({
+				gpu: gpu,
+				metrics: gpuMetrics
+			});
+		}
+
+
     let disks;
     if (intervalMinutes === 1) {
         disks = await db.execute(sql`
@@ -185,6 +220,7 @@ export const load = async ({params, url, depends}) => {
         system: system,
         metrics: metrics,
         disks: disks,
+				gpus: gpus,
         // Add alert summary data
         alertSummary: await getAlertSummary(path_number)
     };

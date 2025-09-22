@@ -97,6 +97,44 @@ export const alertNotifiers = pgTable("alert_notifiers", {
 	}),
 ]);
 
+export const gpus = pgTable("gpus", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "gpus_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	systemId: integer("system_id").notNull(),
+	gpuIndex: integer("gpu_index").notNull(),
+	uuid: text(),
+	name: text(),
+	pciBus: text("pci_bus"),
+	memoryTotalMb: integer("memory_total_mb"),
+	driver: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+}, (table) => [
+	index("gpus_system_id_idx").using("btree", table.systemId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+		columns: [table.systemId],
+		foreignColumns: [systems.id],
+		name: "gpus_system_fk"
+	}).onDelete("cascade"),
+	unique("gpus_system_idx_unique").on(table.systemId, table.gpuIndex),
+]);
+
+export const gpuMetrics = pgTable("gpu_metrics", {
+	time: timestamp({ withTimezone: true, mode: 'string' }).notNull(),
+	gpuId: integer("gpu_id").notNull(),
+	temperature: doublePrecision(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	memoryUsedMb: bigint("memory_used_mb", { mode: "number" }),
+	utilization: doublePrecision(),
+	power: doublePrecision(),
+}, (table) => [
+	index("gpu_metrics_time_gpu_idx").using("btree", table.time.asc().nullsLast().op("int4_ops"), table.gpuId.asc().nullsLast().op("int4_ops")),
+	index("gpu_metrics_time_idx").using("btree", table.time.desc().nullsFirst().op("timestamptz_ops")),
+	foreignKey({
+		columns: [table.gpuId],
+		foreignColumns: [gpus.id],
+		name: "gpu_metrics_gpu_id_fk"
+	}).onDelete("cascade"),
+]);
+
 export const services = pgTable("services", {
 	id: serial().notNull(),
 	system: integer().notNull(),
@@ -238,6 +276,7 @@ export const usersRelations = relations(users, ({many}) => ({
 export const systemsRelations = relations(systems, ({one, many}) => ({
 	alertSystems: many(alertSystems),
 	services: many(services),
+	gpuses: many(gpus),
 	user: one(users, {
 		fields: [systems.admin],
 		references: [users.id]
@@ -245,6 +284,21 @@ export const systemsRelations = relations(systems, ({one, many}) => ({
 	disks: many(disks),
 	metrics: many(metrics),
 	alertHistories: many(alertHistory),
+}));
+
+export const gpusRelations = relations(gpus, ({one, many}) => ({
+	system: one(systems, {
+		fields: [gpus.systemId],
+		references: [systems.id]
+	}),
+	gpuMetrics: many(gpuMetrics),
+}));
+
+export const gpuMetricsRelations = relations(gpuMetrics, ({one}) => ({
+	gpus: one(gpus, {
+		fields: [gpuMetrics.gpuId],
+		references: [gpus.id]
+	}),
 }));
 
 export const servicesRelations = relations(services, ({one}) => ({

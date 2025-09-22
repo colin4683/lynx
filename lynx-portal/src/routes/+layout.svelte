@@ -24,8 +24,8 @@
 <div class="w-full h-full flex flex-col align-middle items-center justify-center p-3 sm:p-20 gap-10">
 	<nav class="w-full bg-[var(--foreground)] flex align-middle items-center justify-between p-3  rounded-md border border-[var(--border)]">
 		<div class="flex items-center align-middle gap-10">
-			<h1 class="text-[var(--primary)] text-xl font-bold">Lynx</h1>
-			<div class="flex items-center align-middle gap-2">
+			<h1 class="text-[var(--primary)] text-xl font-bold font-sans">Lynx</h1>
+			<div class="flex items-center align-middle gap-2 font-normal">
 				<a href="/" onclick={() => activeTab = 'dashboard'} class="{activeTab == 'dashboard' ? 'active' : ''}" >Dashboard</a>
 				<a href="/systems" onclick={() => activeTab = 'systems'} class="{activeTab == 'systems' ? 'active' : ''}" >Systems</a>
 				<a href="/alerts" onclick={() => activeTab = 'alerts'} class="{activeTab == 'alerts' ? 'active' : ''}" >Alerts</a>

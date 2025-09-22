@@ -159,7 +159,6 @@
 	})
 
 	const diskChartData = $derived.by(() => {
-		console.log(data.disks);
 		return data.disks.map((disk: any) => ({
 			time: new Date(disk.time_slot).toLocaleTimeString('it-IT'),
 			read: disk.read_total ? disk.read_total / 1024 / 1024 / 1024 : 0,
@@ -197,7 +196,6 @@
 
 	const temperatureData = $derived.by(() => {
 		return data.metrics.map((metric: any) => {
-			console.log("Metric:", metric);
 			let component_temp_array = metric.components;
 			// combine all components into a single object for each time slot
 			let data= {
@@ -228,6 +226,55 @@
 			label: "Tctl",
 			color: "#ff0000"
 		},
+	});
+
+	const gpuTemperatureConfig = $derived.by(() => {
+		return data.gpus.map((gpu: any, index: number) => ({
+			[`${gpu.gpu.uuid}`]: {
+				label: `${gpu.gpu.name}`,
+				color:  // color based on temperature
+					`hsl(${Math.min(120, Math.max(0, 120 - (index * 20)))}, 70%, 50%)`
+			}
+		})).reduce((acc, curr) => ({ ...acc, ...curr }), {});
+	});
+
+	const gpuTemperatureData = $derived.by(() => {
+		return data.gpus.map((gpu: any) => {
+			let metrics_array = gpu.metrics;
+			// combine all gpus into a single object for each time slot
+			return metrics_array.map((metric: any) => ({
+				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
+				[`${gpu.gpu.uuid}`]: metric.avg_temperature ? metric.avg_temperature : 0
+			}))
+		}).flat();
+	});
+
+	const gpuMemoryConfig = $derived.by(() => {
+		return data.gpus.map((gpu: any, index: number) => ({
+			[`${gpu.gpu.uuid}`]: {
+				label: `${gpu.gpu.name} Memory Used`,
+				color:  // color based on temperature
+					`hsl(${Math.min(120, Math.max(0, 120 - (index * 20)))}, 70%, 50%)`
+			},
+			[`${gpu.gpu.uuid} Total`]: {
+				label: `${gpu.gpu.name} Memory Total`,
+				color:  // color based on temperature
+					`hsl(${Math.min(120, Math.max(0, 120 - (index * 20)))}, 70%, 20%)`
+			}
+		})).reduce((acc, curr) => ({ ...acc, ...curr }), {});
+	});
+
+	const gpuMemoryData = $derived.by(() => {
+		return data.gpus.map((gpu: any) => {
+			let metrics_array = gpu.metrics;
+			// combine all gpus into a single object for each time slot
+			console.log(gpu.gpu);
+			return metrics_array.map((metric: any) => ({
+				time: new Date(metric.time_slot).toLocaleTimeString('it-IT'),
+				[`${gpu.gpu.uuid}`]: metric.avg_memory_used_mb ? metric.avg_memory_used_mb / 1024 : 0,
+				[`${gpu.gpu.uuid} Total`]: gpu.gpu.memoryTotalMb ? gpu.gpu.memoryTotalMb / 1024 : 0
+			}))
+		}).flat();
 	});
 
 /*	const temperatureConfig = $derived.by(() => {
@@ -266,7 +313,6 @@
 
 	function getMsToNextMetric() {
 		const lastMetric = data.metrics[data.metrics.length - 1];
-		console.log("Last metric:", lastMetric);
 		if (!lastMetric || !lastMetric.time_slot) {
 			// fallback to 1 minute from now
 			return 60000;
@@ -275,7 +321,6 @@
 		const now = new Date();
 		const intervalMs = 60 * 1000; // 1 minute in ms
 		const nextMetric = new Date(last.getTime() + intervalMs);
-		console.log("Next metric:", nextMetric);
 
 		const msToNext = nextMetric.getTime() - now.getTime();
 		// If we're already past the next metric, schedule for the next interval after now
@@ -298,9 +343,7 @@
 		stopPolling(); // Clear any existing intervals/timeouts
 
 		const metricsArr = data.metrics;
-		console.log(metricsArr);
 		const lastMetric = metricsArr[metricsArr.length - 1];
-		console.log(lastMetric);// Most recent metric (DESC order)
 		if (!lastMetric || !lastMetric.latest_original_time) {
 			// fallback: refresh in 1 minute
 			pollTimeout = setTimeout(refreshMetrics, 61000);
@@ -315,10 +358,7 @@
 		const nextMetric = new Date(last.getTime() + 61000); // exactly 1 minute after last metric, including seconds
 		let msToNext = nextMetric.getTime() - now.getTime();
 		if (msToNext < 0) msToNext = 61000; // If already past, refresh ASAP
-		console.log("Last metric:", last);
-		console.log("Next metric:", nextMetric);
-		console.log("Now:", now);
-		console.log("Milliseconds to next metric:", msToNext);
+
 
 		timeLeft = Math.ceil(msToNext / 1000);
 
@@ -556,6 +596,36 @@
 			y=""
 			stack="overlap"
 			format={(d) => `${d.toFixed(2)}°C`}
+			onEvent={refreshChart}
+		/>
+	</div>
+
+	<div class={`row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border`}>
+		<h1 class="text-lg font-extrabold">GPU Temperatures</h1>
+		<p class="text-xs text-muted-foreground -mt-3 ">GPU temperatures over the last {range}.</p>
+		<LineChart
+			config={gpuTemperatureConfig}
+			data={gpuTemperatureData}
+			x="time"
+			y=""
+			stack="overlap"
+			format={(d) => `${d.toFixed(2)}°C`}
+			onEvent={refreshChart}
+		/>
+	</div>
+
+
+
+	<div class={`row-span-2 bg-[var(--foreground)] rounded-md p-5 flex flex-col gap-3 border border-border`}>
+		<h1 class="text-lg font-extrabold">GPU Memory usage</h1>
+		<p class="text-xs text-muted-foreground -mt-3 ">GPU memory usage over the last {range}.</p>
+		<LineChart
+			config={gpuMemoryConfig}
+			data={gpuMemoryData}
+			x="time"
+			y=""
+			stack="overlap"
+			format={(d) => `${d.toFixed(2)}gb`}
 			onEvent={refreshChart}
 		/>
 	</div>
