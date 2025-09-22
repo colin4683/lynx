@@ -1,381 +1,86 @@
-use crate::queries::alert_queries;
-use lettre::transport::smtp::response::Severity;
-use log::info;
-use mail_send::mail_builder::MessageBuilder;
-use mail_send::SmtpClientBuilder;
-use mail_send::{Credentials, Error as MailError};
-use regex::Regex;
-use reqwest::Client;
-use sqlx::Row;
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
-#[derive(Debug)]
-pub struct NotificationRule {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub description: String,
-    pub severity: String,
-    pub expression: String,
-    pub conditions: Vec<Condition>,
-    pub actions: Vec<String>,
-}
+pub mod components;
+pub mod processor;
+pub mod rules;
+pub mod services;
 
-#[derive(Debug)]
-pub struct Condition {
-    pub component: String,
-    pub metric: String,
-    pub operator: String,
-    pub value: String,
-    pub next_compare: Option<String>,
-}
+pub use components::*;
+pub use processor::*;
+pub use rules::*;
+pub use services::*;
 
+// Custom error type for metric evaluation
 #[derive(Error, Debug)]
-pub enum NotificationError {
-    #[error("Email sending error: {0}")]
-    EmailError(#[from] MailError),
-    #[error("HTTP request error: {0}")]
-    RequestError(#[from] reqwest::Error),
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
+pub enum MetricError {
+    #[error("Component not found: {0}")]
+    ComponentNotFound(String),
+    #[error("Metric not found: {0}")]
+    MetricNotFound(String),
+    #[error("Invalid value: {0}")]
+    InvalidValue(String),
 }
 
-pub enum NotificationService {
-    Email(EmailConfig),
-    Discord(DiscordConfig),
-    Slack(SlackConfig),
-    Error,
+// Core traits
+#[async_trait]
+pub trait MetricComponent: Send + Sync {
+    async fn get_metric(&self, metric_name: &str) -> Result<f64, MetricError>;
+    fn available_metrics(&self) -> Vec<&str>;
 }
 
-pub struct EmailConfig {
-    pub smtp_server: String,
-    pub smtp_port: u16,
-    pub username: String,
-    pub password: String,
-    pub from_email: String,
-    pub to_email: String,
-    pub subject: String,
+#[async_trait]
+pub trait NotificationService: Send + Sync + Clone {
+    async fn send(&self, message: &str) -> Result<(), NotificationError>;
 }
 
-pub struct DiscordConfig {
-    pub webhook_url: String,
-    pub username: String,
+// Thread-safe metric registry
+pub struct MetricRegistry {
+    components: Arc<RwLock<HashMap<String, Box<dyn MetricComponent>>>>,
 }
 
-pub struct SlackConfig {
-    pub webhook_url: String,
-}
+impl MetricRegistry {
+    pub fn new() -> Self {
+        Self {
+            components: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 
-impl NotificationService {
-    pub async fn send(&self, message: &str) -> Result<(), NotificationError> {
-        match self {
-            NotificationService::Email(config) => send_email(config, message).await,
-            NotificationService::Discord(config) => send_discord(config, message).await,
-            NotificationService::Slack(_config) => Ok(()),
-            NotificationService::Error => Err(NotificationError::ConfigError(
-                "Invalid notification service".to_string(),
-            )),
+    pub async fn register_component(&self, name: String, component: Box<dyn MetricComponent>) {
+        let mut components = self.components.write().await;
+        components.insert(name, component);
+    }
+
+    pub async fn get_metric_value(
+        &self,
+        component: &str,
+        metric: &str,
+    ) -> Result<f64, MetricError> {
+        let components = self.components.read().await;
+        if let Some(comp) = components.get(component) {
+            comp.get_metric(metric).await
+        } else {
+            Err(MetricError::ComponentNotFound(component.to_string()))
         }
     }
 }
 
-async fn send_discord(config: &DiscordConfig, message: &str) -> Result<(), NotificationError> {
-    let client = Client::new();
+use crate::proto::monitor::MetricsRequest;
+use sqlx::PgPool;
 
-    // build an embedded message
-    let payload = serde_json::json!({
-        "username": &config.username,
-        "embeds": [{
-            "title": "Lynx Monitor Alert",
-            "description": message,
-            "color": 16711680
-        }]
-    });
-    let res = client
-        .post(&config.webhook_url)
-        .json(&payload)
-        .send()
-        .await?;
-
-    Ok(())
-}
-
-async fn send_email(config: &EmailConfig, message: &str) -> Result<(), NotificationError> {
-    let message = MessageBuilder::new()
-        .from(config.from_email.clone())
-        .to(config.to_email.clone())
-        .subject(config.subject.clone())
-        .text_body(message.to_string());
-
-    let crednetials = Credentials::Plain {
-        username: &config.username,
-        secret: &config.password,
-    };
-
-    SmtpClientBuilder::new(&config.smtp_server, config.smtp_port)
-        .implicit_tls(false)
-        .credentials(crednetials)
-        .connect()
-        .await
-        .unwrap()
-        .send(message)
-        .await?;
-
-    Ok(())
-}
-
+/// Process notifications for a system's metrics
+///
+/// This function is the main entry point for the notification system.
+/// It handles metric processing, rule evaluation, and notification dispatch
+/// in a modular and fault-tolerant way.
 pub async fn process_notification(
-    metrics: &crate::proto::monitor::MetricsRequest,
+    metrics: &MetricsRequest,
     system_id: i32,
-    pool: &sqlx::PgPool,
+    pool: &PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let alerts = sqlx::query(alert_queries::GET_ALERT_SYSTEMS)
-        .bind(system_id)
-        .fetch_all(pool)
-        .await?;
-
-    let mut rules = Vec::new();
-    for alert in alerts {
-        let id_i32: i32 = alert.get("rule_id");
-        let row = sqlx::query(alert_queries::GET_ALERT_RULES)
-            .bind(id_i32)
-            .fetch_one(pool)
-            .await?;
-
-        let notifiers = sqlx::query(alert_queries::GET_ALERT_NOTIFIERS)
-            .bind(id_i32)
-            .fetch_all(pool)
-            .await?;
-
-        let id: i32 = row.get("id");
-        let name: String = row.get("name");
-        let enabled: bool = row.get("active");
-        let expression: String = row.get("expression");
-        let severity: String = row.get("severity");
-        let description: String = row.get("description");
-        let mut conditions = Vec::new();
-        let mut actions = Vec::new();
-
-        let component_re =
-            Regex::new(r"^([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*([<>!=]+)\s*([a-zA-Z0-9_.]+)")
-                .unwrap();
-        let logical_re = Regex::new(r"\s+(AND|OR)\s+").unwrap();
-        let segments: Vec<&str> = logical_re.split(&expression).collect();
-        let operators: Vec<&str> = logical_re
-            .find_iter(&expression)
-            .map(|m| m.as_str().trim())
-            .collect();
-
-        for (i, segment) in segments.iter().enumerate() {
-            if let Some(caps) = component_re.captures(segment) {
-                let component = caps.get(1).unwrap().as_str().to_string();
-                let metric = caps.get(2).unwrap().as_str().to_string();
-                let operator = caps.get(3).unwrap().as_str().to_string();
-                let value = caps.get(4).unwrap().as_str().to_string();
-                let next_compare = if i < operators.len() {
-                    Some(operators[i].to_string())
-                } else {
-                    None
-                };
-                conditions.push(Condition {
-                    component,
-                    metric,
-                    operator,
-                    value,
-                    next_compare,
-                });
-            }
-
-            for notifier in &notifiers {
-                let notifier_id: i32 = notifier.get("notifier_id");
-                let notifier_row = sqlx::query(alert_queries::GET_NOTIFIERS)
-                    .bind(notifier_id)
-                    .fetch_one(pool)
-                    .await?;
-
-                let notifier_type: String = notifier_row.get("type");
-                let notifier_value: String = notifier_row.get("value");
-                actions.push(format!("{}:{}", notifier_type, notifier_value));
-            }
-        }
-
-        rules.push(NotificationRule {
-            id: id.to_string(),
-            name,
-            enabled,
-            description,
-            severity,
-            expression,
-            conditions,
-            actions,
-        });
-    }
-
-    for rule in rules {
-        let mut conditions_met = false;
-        for condition in &rule.conditions {
-            let metric_value = match condition.component.as_str() {
-                "cpu" => match condition.metric.as_str() {
-                    "usage" => metrics.cpu_stats.unwrap().usage_percent as f64,
-                    _ => return Err("Unknown CPU metric".into()),
-                },
-                "memory" => match condition.metric.as_str() {
-                    "used" => metrics.memory_stats.unwrap().used_kb as f64,
-                    "total" => metrics.memory_stats.unwrap().total_kb as f64,
-                    "usage" => {
-                        metrics.memory_stats.unwrap().used_kb as f64
-                            / metrics.memory_stats.unwrap().total_kb as f64
-                            * 100.0
-                    }
-                    _ => return Err("Unknown Memory metric".into()),
-                },
-                "load" => match condition.metric.as_str() {
-                    "one" => metrics.load_average.unwrap().one_minute as f64,
-                    "five" => metrics.load_average.unwrap().five_minutes as f64,
-                    "fifteen" => metrics.load_average.unwrap().fifteen_minutes as f64,
-                    _ => return Err("Unknown Load metric".into()),
-                },
-                _ => return Err("Unknown component".into()),
-            };
-            let comparison_result = match condition.operator.as_str() {
-                ">" => metric_value > condition.value.parse::<f64>()?,
-                "<" => metric_value < condition.value.parse::<f64>()?,
-                ">=" => metric_value >= condition.value.parse::<f64>()?,
-                "<=" => metric_value <= condition.value.parse::<f64>()?,
-                "==" => metric_value == condition.value.parse::<f64>()?,
-                "!=" => metric_value != condition.value.parse::<f64>()?,
-                _ => return Err("Invalid operator".into()),
-            };
-            conditions_met = comparison_result;
-            if let Some(next_compare) = &condition.next_compare {
-                if next_compare == "and" && !conditions_met {
-                    break;
-                } else if next_compare == "or" && conditions_met {
-                    continue;
-                }
-            }
-        }
-        if conditions_met {
-            let existing_alert = sqlx::query(alert_queries::GET_EXISTING_ALERT)
-                .bind(system_id)
-                .bind(rule.id.parse::<i32>()?)
-                .fetch_optional(pool)
-                .await?;
-
-            if let Some(_) = existing_alert {
-                continue;
-            }
-
-            sqlx::query(alert_queries::INSERT_ALERT_HISTORY)
-                .bind(system_id)
-                .bind(rule.id.parse::<i32>()?)
-                .execute(pool)
-                .await?;
-            for action in &rule.actions {
-                let parts: Vec<&str> = action.splitn(2, ':').collect();
-                if parts.len() != 2 {
-                    continue;
-                }
-                let notifier_type = parts[0];
-                let notifier_value = parts[1];
-                let notifier_value = urlencoding::decode(notifier_value)
-                    .map_err(|_| {
-                        NotificationError::ConfigError(
-                            "Failed to decode notifier value".to_string(),
-                        )
-                    })?
-                    .to_string();
-                let notify_type = notifier_value.split("://").nth(0).ok_or_else(|| {
-                    NotificationError::ConfigError("Invalid notifier URL format".to_string())
-                })?;
-                let mut message = String::new();
-                let service = match notify_type {
-                    "discord" => {
-                        let second_half = notifier_value.split("://").nth(1).ok_or_else(|| {
-                            NotificationError::ConfigError(
-                                "Invalid Discord webhook URL format".to_string(),
-                            )
-                        })?;
-                        let token = second_half.split('@').nth(0).ok_or_else(|| {
-                            NotificationError::ConfigError(
-                                "Invalid Discord webhook URL format".to_string(),
-                            )
-                        })?;
-                        let third_half = second_half.split('@').nth(1).ok_or_else(|| {
-                            NotificationError::ConfigError(
-                                "Invalid Discord webhook URL format".to_string(),
-                            )
-                        })?;
-                        let channel_id = third_half.split('?').nth(0).ok_or_else(|| {
-                            NotificationError::ConfigError(
-                                "Invalid Discord webhook URL format".to_string(),
-                            )
-                        })?;
-                        let username = third_half
-                            .split('?')
-                            .nth(1)
-                            .and_then(|q| q.split('=').nth(1).map(|u| u.replace('+', " ")))
-                            .unwrap_or_else(|| "Lynx Monitor".to_string());
-                        let webhook_url =
-                            format!("https://discord.com/api/webhooks/{}/{}", channel_id, token);
-                        message = format!(
-                            "```Alert: {}```\n```Description: {}```\n```Expression: {}```\n```Condition met on system ID {}```",
-                            rule.name, rule.description, rule.expression, system_id
-                        );
-                        NotificationService::Discord(DiscordConfig {
-                            webhook_url,
-                            username,
-                        })
-                    }
-                    "smtp" => {
-                        info!(
-                            "Preparing to send email notification for rule {}",
-                            rule.name
-                        );
-                        let re = Regex::new(
-                            r"^smtp://([^:]+):([^@]+)@([^:]+):(\d+)\?from=([^&]+)&to=(.+)$",
-                        )
-                        .unwrap();
-                        if let Some(caps) = re.captures(notifier_value.as_str()) {
-                            let username = caps.get(1).unwrap().as_str().to_string();
-                            let password = caps.get(2).unwrap().as_str().to_string();
-                            let smtp_server = caps.get(3).unwrap().as_str().to_string();
-                            let smtp_port =
-                                caps.get(4).unwrap().as_str().parse::<u16>().map_err(|_| {
-                                    NotificationError::ConfigError(
-                                        "Invalid SMTP port number".to_string(),
-                                    )
-                                })?;
-                            let from_email = caps.get(5).unwrap().as_str().to_string();
-                            let to_email = caps.get(6).unwrap().as_str().to_string();
-                            message = format!(
-                                "Alert: {}\nDescription: {}\nExpression: {}\nCondition met on system ID {}",
-                                rule.name, rule.description, rule.expression, system_id
-                            );
-                            NotificationService::Email(EmailConfig {
-                                smtp_server,
-                                smtp_port,
-                                username,
-                                password,
-                                from_email,
-                                to_email,
-                                subject: format!("Lynx Alert: {}", rule.name),
-                            })
-                        } else {
-                            NotificationService::Error
-                        }
-                    }
-                    _ => continue,
-                };
-
-                if let Err(e) = service.send(&message).await {
-                    eprintln!("Failed to send notification: {}", e);
-                } else {
-                    info!("Notification sent via {}", notifier_type);
-                }
-            }
-        }
-    }
-
-    Ok(())
+    let mut processor = NotificationProcessor::new(pool.clone());
+    processor.process(metrics, system_id).await
 }
