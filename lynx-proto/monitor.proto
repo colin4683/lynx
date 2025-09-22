@@ -4,6 +4,8 @@ package monitor;
 
 service SystemMonitor {
     rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
+    rpc RegisterGPUs (GpuRequest) returns (GpuResponse);
+    rpc ReportGPUMetrics (GpuMetricsRequest) returns (GpuResponse);
     rpc GetSystemInfo (SystemInfoRequest) returns (SystemInfoResponse);
     rpc ReportSystemctl (SystemctlRequest) returns (SystemctlResponse);
 }
@@ -25,9 +27,19 @@ message MetricsRequest {
     NetworkStats network_stats = 12;
     LoadAverage load_average = 13;
 }
+
+message GpuRequest {
+    repeated GpuInfo gpus = 1;
+}
+
+message GpuMetricsRequest {
+    repeated GpuMetrics gpu_metrics = 1;
+}
+
 message SystemctlRequest {
     repeated SystemService services = 1;
 }
+
 message SystemService {
     string service_name = 1;
     string description = 2;
@@ -41,6 +53,13 @@ message SystemctlResponse {
     string status = 1;
     string message = 2;
 }
+
+message GpuResponse {
+    string status = 1;
+    string message = 2;
+}
+
+
 
 message CpuStats {
     double usage_percent = 1;
@@ -87,4 +106,21 @@ message SystemInfoResponse {
     string status = 1;
     string message = 2;
 
+}
+
+message GpuMetrics {
+    uint32 gpu_index = 1;
+    double utilization = 2;
+    uint64 memory_used_mb = 3;
+    double temperature = 4;
+    double power = 5;
+}
+
+message GpuInfo {
+    uint32 gpu_index = 1;
+    string uuid = 2;
+    string name = 3;
+    string pci_bus = 4;
+    string driver = 5;
+    uint64 memory_total_mb = 6;
 }
