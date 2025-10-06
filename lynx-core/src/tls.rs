@@ -8,8 +8,8 @@ pub fn build_tls_config(certs_dir: &Path) -> Result<ServerTlsConfig, Box<dyn Err
         return Err(format!("Certificates directory not found: {:?}", certs_dir).into());
     }
 
-    let server_cert_path = certs_dir.join("server.crt");
-    let server_key_path = certs_dir.join("server.key");
+    let server_cert_path = certs_dir.join("docker.crt");
+    let server_key_path = certs_dir.join("docker.key");
     if !server_cert_path.exists() || !server_key_path.exists() {
         return Err(format!("Server certificate or key not found in {:?}", certs_dir).into());
     }

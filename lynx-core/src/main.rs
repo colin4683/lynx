@@ -31,7 +31,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
-
     // Setup DB
     let db_pool = match db::setup_db(&database_url).await {
         Ok(pool) => {
@@ -55,7 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Build and run gRPC server
     let cache = Cache::new(10_000, 1_000);
     let snapshot_path = current_dir.join("cache.snapshot");
     if let Err(e) = cache.load_from_file(&snapshot_path).await {

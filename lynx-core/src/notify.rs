@@ -71,11 +71,6 @@ impl MetricRegistry {
 use crate::proto::monitor::MetricsRequest;
 use sqlx::PgPool;
 
-/// Process notifications for a system's metrics
-///
-/// This function is the main entry point for the notification system.
-/// It handles metric processing, rule evaluation, and notification dispatch
-/// in a modular and fault-tolerant way.
 pub async fn process_notification(
     metrics: &MetricsRequest,
     system_id: i32,

@@ -40,6 +40,16 @@ pub struct GpuMetricsRequest {
     pub gpu_metrics: ::prost::alloc::vec::Vec<GpuMetrics>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContainerRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub containers: ::prost::alloc::vec::Vec<ContainerInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContainerMetricsRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub container_metrics: ::prost::alloc::vec::Vec<ContainerMetrics>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemctlRequest {
     #[prost(message, repeated, tag = "1")]
     pub services: ::prost::alloc::vec::Vec<SystemService>,
@@ -68,6 +78,20 @@ pub struct SystemctlResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GpuResponse {
+    #[prost(string, tag = "1")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContainerResponse {
+    #[prost(string, tag = "1")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Response {
     #[prost(string, tag = "1")]
     pub status: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
@@ -169,6 +193,24 @@ pub struct GpuInfo {
     #[prost(uint64, tag = "6")]
     pub memory_total_mb: u64,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContainerMetrics {
+    #[prost(string, tag = "1")]
+    pub docker_id: ::prost::alloc::string::String,
+    #[prost(double, tag = "2")]
+    pub cpu_usage: f64,
+    #[prost(double, tag = "3")]
+    pub memory_usage: f64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ContainerInfo {
+    #[prost(string, tag = "1")]
+    pub docker_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub state: ::prost::alloc::string::String,
+}
 /// Generated client implementations.
 pub mod system_monitor_client {
     #![allow(
@@ -260,13 +302,31 @@ pub mod system_monitor_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
+        pub async fn get_system_info(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SystemInfoRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/GetSystemInfo",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "GetSystemInfo"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn report_metrics(
             &mut self,
             request: impl tonic::IntoRequest<super::MetricsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::MetricsResponse>,
-            tonic::Status,
-        > {
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -284,10 +344,31 @@ pub mod system_monitor_client {
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportMetrics"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn report_systemctl(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SystemctlRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/ReportSystemctl",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportSystemctl"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn register_gp_us(
             &mut self,
             request: impl tonic::IntoRequest<super::GpuRequest>,
-        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status> {
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -308,7 +389,7 @@ pub mod system_monitor_client {
         pub async fn report_gpu_metrics(
             &mut self,
             request: impl tonic::IntoRequest<super::GpuMetricsRequest>,
-        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status> {
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -326,13 +407,10 @@ pub mod system_monitor_client {
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportGPUMetrics"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn get_system_info(
+        pub async fn register_containers(
             &mut self,
-            request: impl tonic::IntoRequest<super::SystemInfoRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SystemInfoResponse>,
-            tonic::Status,
-        > {
+            request: impl tonic::IntoRequest<super::ContainerRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -343,20 +421,17 @@ pub mod system_monitor_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/monitor.SystemMonitor/GetSystemInfo",
+                "/monitor.SystemMonitor/RegisterContainers",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("monitor.SystemMonitor", "GetSystemInfo"));
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "RegisterContainers"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn report_systemctl(
+        pub async fn report_container_metrics(
             &mut self,
-            request: impl tonic::IntoRequest<super::SystemctlRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SystemctlResponse>,
-            tonic::Status,
-        > {
+            request: impl tonic::IntoRequest<super::ContainerMetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
             self.inner
                 .ready()
                 .await
@@ -367,11 +442,13 @@ pub mod system_monitor_client {
                 })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
-                "/monitor.SystemMonitor/ReportSystemctl",
+                "/monitor.SystemMonitor/ReportContainerMetrics",
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportSystemctl"));
+                .insert(
+                    GrpcMethod::new("monitor.SystemMonitor", "ReportContainerMetrics"),
+                );
             self.inner.unary(req, path, codec).await
         }
     }
@@ -389,32 +466,34 @@ pub mod system_monitor_server {
     /// Generated trait containing gRPC methods that should be implemented for use with SystemMonitorServer.
     #[async_trait]
     pub trait SystemMonitor: std::marker::Send + std::marker::Sync + 'static {
-        async fn report_metrics(
-            &self,
-            request: tonic::Request<super::MetricsRequest>,
-        ) -> std::result::Result<tonic::Response<super::MetricsResponse>, tonic::Status>;
-        async fn register_gp_us(
-            &self,
-            request: tonic::Request<super::GpuRequest>,
-        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status>;
-        async fn report_gpu_metrics(
-            &self,
-            request: tonic::Request<super::GpuMetricsRequest>,
-        ) -> std::result::Result<tonic::Response<super::GpuResponse>, tonic::Status>;
         async fn get_system_info(
             &self,
             request: tonic::Request<super::SystemInfoRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SystemInfoResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn report_metrics(
+            &self,
+            request: tonic::Request<super::MetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
         async fn report_systemctl(
             &self,
             request: tonic::Request<super::SystemctlRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::SystemctlResponse>,
-            tonic::Status,
-        >;
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn register_gp_us(
+            &self,
+            request: tonic::Request<super::GpuRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn report_gpu_metrics(
+            &self,
+            request: tonic::Request<super::GpuMetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn register_containers(
+            &self,
+            request: tonic::Request<super::ContainerRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn report_container_metrics(
+            &self,
+            request: tonic::Request<super::ContainerMetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct SystemMonitorServer<T> {
@@ -492,6 +571,51 @@ pub mod system_monitor_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
+                "/monitor.SystemMonitor/GetSystemInfo" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetSystemInfoSvc<T: SystemMonitor>(pub Arc<T>);
+                    impl<
+                        T: SystemMonitor,
+                    > tonic::server::UnaryService<super::SystemInfoRequest>
+                    for GetSystemInfoSvc<T> {
+                        type Response = super::Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SystemInfoRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as SystemMonitor>::get_system_info(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetSystemInfoSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/monitor.SystemMonitor/ReportMetrics" => {
                     #[allow(non_camel_case_types)]
                     struct ReportMetricsSvc<T: SystemMonitor>(pub Arc<T>);
@@ -499,7 +623,7 @@ pub mod system_monitor_server {
                         T: SystemMonitor,
                     > tonic::server::UnaryService<super::MetricsRequest>
                     for ReportMetricsSvc<T> {
-                        type Response = super::MetricsResponse;
+                        type Response = super::Response;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -537,12 +661,58 @@ pub mod system_monitor_server {
                     };
                     Box::pin(fut)
                 }
+                "/monitor.SystemMonitor/ReportSystemctl" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReportSystemctlSvc<T: SystemMonitor>(pub Arc<T>);
+                    impl<
+                        T: SystemMonitor,
+                    > tonic::server::UnaryService<super::SystemctlRequest>
+                    for ReportSystemctlSvc<T> {
+                        type Response = super::Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SystemctlRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as SystemMonitor>::report_systemctl(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReportSystemctlSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/monitor.SystemMonitor/RegisterGPUs" => {
                     #[allow(non_camel_case_types)]
                     struct RegisterGPUsSvc<T: SystemMonitor>(pub Arc<T>);
                     impl<T: SystemMonitor> tonic::server::UnaryService<super::GpuRequest>
                     for RegisterGPUsSvc<T> {
-                        type Response = super::GpuResponse;
+                        type Response = super::Response;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -587,7 +757,7 @@ pub mod system_monitor_server {
                         T: SystemMonitor,
                     > tonic::server::UnaryService<super::GpuMetricsRequest>
                     for ReportGPUMetricsSvc<T> {
-                        type Response = super::GpuResponse;
+                        type Response = super::Response;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -626,25 +796,26 @@ pub mod system_monitor_server {
                     };
                     Box::pin(fut)
                 }
-                "/monitor.SystemMonitor/GetSystemInfo" => {
+                "/monitor.SystemMonitor/RegisterContainers" => {
                     #[allow(non_camel_case_types)]
-                    struct GetSystemInfoSvc<T: SystemMonitor>(pub Arc<T>);
+                    struct RegisterContainersSvc<T: SystemMonitor>(pub Arc<T>);
                     impl<
                         T: SystemMonitor,
-                    > tonic::server::UnaryService<super::SystemInfoRequest>
-                    for GetSystemInfoSvc<T> {
-                        type Response = super::SystemInfoResponse;
+                    > tonic::server::UnaryService<super::ContainerRequest>
+                    for RegisterContainersSvc<T> {
+                        type Response = super::Response;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::SystemInfoRequest>,
+                            request: tonic::Request<super::ContainerRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as SystemMonitor>::get_system_info(&inner, request).await
+                                <T as SystemMonitor>::register_containers(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -655,7 +826,7 @@ pub mod system_monitor_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = GetSystemInfoSvc(inner);
+                        let method = RegisterContainersSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -671,25 +842,28 @@ pub mod system_monitor_server {
                     };
                     Box::pin(fut)
                 }
-                "/monitor.SystemMonitor/ReportSystemctl" => {
+                "/monitor.SystemMonitor/ReportContainerMetrics" => {
                     #[allow(non_camel_case_types)]
-                    struct ReportSystemctlSvc<T: SystemMonitor>(pub Arc<T>);
+                    struct ReportContainerMetricsSvc<T: SystemMonitor>(pub Arc<T>);
                     impl<
                         T: SystemMonitor,
-                    > tonic::server::UnaryService<super::SystemctlRequest>
-                    for ReportSystemctlSvc<T> {
-                        type Response = super::SystemctlResponse;
+                    > tonic::server::UnaryService<super::ContainerMetricsRequest>
+                    for ReportContainerMetricsSvc<T> {
+                        type Response = super::Response;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::SystemctlRequest>,
+                            request: tonic::Request<super::ContainerMetricsRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as SystemMonitor>::report_systemctl(&inner, request)
+                                <T as SystemMonitor>::report_container_metrics(
+                                        &inner,
+                                        request,
+                                    )
                                     .await
                             };
                             Box::pin(fut)
@@ -701,7 +875,7 @@ pub mod system_monitor_server {
                     let max_encoding_message_size = self.max_encoding_message_size;
                     let inner = self.inner.clone();
                     let fut = async move {
-                        let method = ReportSystemctlSvc(inner);
+                        let method = ReportContainerMetricsSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -1,4 +1,5 @@
 use super::*;
+use log::info;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -140,6 +141,14 @@ impl<'a> RuleEvaluator<'a> {
             .get_metric_value(&condition.component, &condition.metric)
             .await?;
 
+        info!(
+            "Evaluating condition: {:?}.{:?}",
+            condition.component, condition.metric
+        );
+        info!(
+            "{:?} {:?} {:?}",
+            metric_value, condition.operator, condition.value
+        );
         Ok(match condition.operator {
             Operator::GreaterThan => metric_value > condition.value,
             Operator::LessThan => metric_value < condition.value,
