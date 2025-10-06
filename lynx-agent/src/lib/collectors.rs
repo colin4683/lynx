@@ -1,10 +1,13 @@
 use crate::lib;
 use crate::lib::cache::FastCache;
 use crate::proto::monitor::{
-    GpuMetricsRequest, GpuRequest, GpuResponse, MetricsRequest, SystemInfoRequest, SystemctlRequest,
+    ContainerInfo, ContainerMetrics, ContainerMetricsRequest, ContainerRequest, GpuMetricsRequest,
+    GpuRequest, GpuResponse, MetricsRequest, SystemInfoRequest, SystemctlRequest,
 };
 use async_trait::async_trait;
+use bollard::query_parameters::ListContainersOptions;
 use log::{error, info};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{System, MINIMUM_CPU_UPDATE_INTERVAL};
@@ -26,10 +29,12 @@ pub enum CollectorError {
 #[derive(Debug)]
 pub enum CollectorRequest {
     Metrics(MetricsRequest),
-    GpuInfo(GpuRequest),
-    GpuMetrics(GpuMetricsRequest),
     SystemInfo(SystemInfoRequest),
     Systemctl(SystemctlRequest),
+    GpuInfo(GpuRequest),
+    GpuMetrics(GpuMetricsRequest),
+    ContainerInfo(ContainerRequest),
+    ContainerMetrics(ContainerMetricsRequest),
 }
 
 #[async_trait]
@@ -91,7 +96,6 @@ impl CollectorManager {
 }
 
 pub struct MetricsCollector;
-
 #[async_trait]
 impl Collector for MetricsCollector {
     fn name(&self) -> &'static str {
@@ -133,18 +137,61 @@ impl Collector for MetricsCollector {
                     .map_err(|e| CollectorError::Channel(e.into()))
                     .unwrap_or_else(|e| error!("[collector] failed to send GpuMetrics: {}", e));
                 }
-                Ok(())
             }
             Err(e) => {
                 error!("Failed to collect GPU metrics: {}", e);
-                Ok(())
             }
         }
+
+        // collect Docker metrics for running containers
+        let docker_manager = lib::docker::DockerManager::new().map_err(|e| {
+            CollectorError::SystemInfoCollectionError(format!(
+                "Failed to build docker manager: {}",
+                e
+            ))
+        })?;
+
+        let mut filters = HashMap::new();
+        filters.insert("status".to_string(), vec!["running".to_string()]);
+
+        let options = Some(ListContainersOptions {
+            all: true,
+            filters: Some(filters),
+            ..Default::default()
+        });
+        let docker_containers = docker_manager.list_containers(options).await.map_err(|e| {
+            error!("[agent] Failed to list Docker containers: {}", e);
+            CollectorError::SystemInfoCollectionError(format!(
+                "Failed to collect container stats: {}",
+                e
+            ))
+        })?;
+
+        for container in docker_containers {
+            let container_metrics = docker_manager
+                .get_container_stats(container.docker_id.as_ref())
+                .await
+                .map_err(|e| {
+                    CollectorError::SystemInfoCollectionError(format!(
+                        "Failed to collect container stats: {}",
+                        e
+                    ))
+                })?;
+            if !container_metrics.is_empty() {
+                tx.send(CollectorRequest::ContainerMetrics(
+                    ContainerMetricsRequest { container_metrics },
+                ))
+                .await
+                .map_err(|e| CollectorError::Channel(e.into()))
+                .unwrap_or_else(|e| error!("[collector] failed to send ContainerMetrics: {}", e));
+            }
+        }
+
+        Ok(())
     }
 }
 
 pub struct SystemInfoCollector;
-
 #[async_trait]
 impl Collector for SystemInfoCollector {
     fn name(&self) -> &'static str {
@@ -164,12 +211,34 @@ impl Collector for SystemInfoCollector {
         let request = CollectorRequest::SystemInfo(system_info);
         tx.send(request)
             .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)?;
+
+        let docker_manager = lib::docker::DockerManager::new().map_err(|e| {
+            CollectorError::SystemInfoCollectionError(format!(
+                "Failed to build docker manager: {}",
+                e
+            ))
+        })?;
+
+        let containers = docker_manager.list_containers(None).await.map_err(|e| {
+            error!("[agent] Failed to list Docker containers: {}", e);
+            CollectorError::SystemInfoCollectionError(format!(
+                "Failed to find all containers: {}",
+                e
+            ))
+        })?;
+
+        let request = CollectorRequest::ContainerInfo(ContainerRequest { containers });
+        tx.send(request)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync + 'static>)?;
+
+        Ok(())
     }
 }
+
 #[cfg(target_os = "linux")]
 pub struct SystemctlCollector;
-
 #[cfg(target_os = "linux")]
 #[async_trait]
 impl Collector for SystemctlCollector {

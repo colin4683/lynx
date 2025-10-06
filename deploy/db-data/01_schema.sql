@@ -1,44 +1,75 @@
-CREATE TABLE "alert_history"
+CREATE TABLE "users"
 (
-    "id"     integer GENERATED ALWAYS AS IDENTITY (
-        sequence name "alert_history_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
+    "id"             integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
+        sequence name "users_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
             WITH
             1 CACHE 1
         ),
-    "system" integer       NOT NULL,
-    "alert"  integer       NOT NULL,
-    "date"   timestamp
-                 with
-                 time zone NOT NULL
+    "email"          text NOT NULL,
+    "password"       text NOT NULL,
+    "admin"          boolean DEFAULT false,
+    "email_verified" boolean DEFAULT false,
+    "totp_key"       "bytea",
+    "recovery_code"  text
 );
 
-CREATE TABLE "alert_notifiers"
+CREATE TABLE "systems"
 (
-    "rule_id"     integer NOT NULL,
-    "notifier_id" integer NOT NULL
+    "id"           serial PRIMARY KEY NOT NULL,
+    "hostname"     text,
+    "address"      text               NOT NULL,
+    "last_seen"    timestamp
+                       with
+                       time zone,
+    "key"          text,
+    "active"       boolean DEFAULT false,
+    "expires"      timestamp
+                       with
+                       time zone,
+    "token"        text,
+    "label"        text               NOT NULL,
+    "cpu"          text,
+    "os"           text,
+    "kernal"       text,
+    "cpu_count"    integer,
+    "cpu_usage"    double precision,
+    "uptime"       integer,
+    "memory_used"  bigint,
+    "memory_total" bigint,
+    "admin"        integer,
+    CONSTRAINT "systems_hostname_key" UNIQUE ("hostname")
 );
 
-CREATE TABLE "alert_rules"
+CREATE TABLE "notifiers"
 (
-    "id"          integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
-        sequence name "alert_rules_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
+    "id"    integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
+        sequence name "notifiers_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
             WITH
             1 CACHE 1
         ),
+    "user"  integer,
+    "type"  text NOT NULL,
+    "value" text NOT NULL
+);
+
+CREATE TABLE "services"
+(
+    "id"          serial  NOT NULL,
+    "system"      integer NOT NULL,
     "name"        text    NOT NULL,
     "description" text,
-    "user_id"     integer NOT NULL,
-    "expression"  text    NOT NULL,
-    "severity"    text    NOT NULL,
-    "active"      boolean   DEFAULT false,
-    "created"     timestamp DEFAULT now(),
-    "updated"     timestamp DEFAULT now()
+    "state"       text,
+    "pid"         integer,
+    "cpu"         text,
+    "memory"      text
 );
 
-CREATE TABLE "alert_systems"
+CREATE TABLE "sessions"
 (
-    "rule_id"   integer NOT NULL,
-    "system_id" integer NOT NULL
+    "id"                  text PRIMARY KEY  NOT NULL,
+    "user_id"             integer           NOT NULL,
+    "expires_at"          integer           NOT NULL,
+    "two_factor_verified" integer DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE "disks"
@@ -105,78 +136,70 @@ CREATE TABLE "gpu_metrics"
 
 SELECT create_hypertable('gpu_metrics', 'time', if_not_exists => true);
 
-CREATE TABLE "notifiers"
+CREATE TABLE "containers"
 (
-    "id"    integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
-        sequence name "notifiers_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
+    "id"         integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    "system_id"  integer NOT NULL,
+    "docker_id"  text    NOT NULL,
+    "name"       text    NOT NULL,
+    "state"      text,
+    "created_at" timestamp with time zone DEFAULT now(),
+    "updated_at" timestamp with time zone DEFAULT now(),
+    CONSTRAINT containers_system_idx_unique UNIQUE ("system_id", "id"),
+    CONSTRAINT containers_system_fk FOREIGN KEY ("system_id") REFERENCES "public"."systems" ("id") ON DELETE CASCADE
+);
+
+CREATE TABLE "container_metrics"
+(
+    "time"         timestamp NOT NULL DEFAULT now(),
+    "container_id" integer   NOT NULL,
+    "cpu_usage"    double precision,
+    "memory_usage" double precision
+);
+
+SELECT create_hypertable('container_metrics', 'time', if_not_exists => true);
+
+CREATE TABLE "alert_rules"
+(
+    "id"          integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
+        sequence name "alert_rules_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
             WITH
             1 CACHE 1
         ),
-    "user"  integer,
-    "type"  text NOT NULL,
-    "value" text NOT NULL
-);
-
-CREATE TABLE "services"
-(
-    "id"          serial  NOT NULL,
-    "system"      integer NOT NULL,
     "name"        text    NOT NULL,
     "description" text,
-    "state"       text,
-    "pid"         integer,
-    "cpu"         text,
-    "memory"      text
+    "user_id"     integer NOT NULL,
+    "expression"  text    NOT NULL,
+    "severity"    text    NOT NULL,
+    "active"      boolean   DEFAULT false,
+    "created"     timestamp DEFAULT now(),
+    "updated"     timestamp DEFAULT now()
 );
 
-CREATE TABLE "sessions"
+CREATE TABLE "alert_notifiers"
 (
-    "id"                  text PRIMARY KEY  NOT NULL,
-    "user_id"             integer           NOT NULL,
-    "expires_at"          integer           NOT NULL,
-    "two_factor_verified" integer DEFAULT 0 NOT NULL
+    "rule_id"     integer NOT NULL,
+    "notifier_id" integer NOT NULL
 );
 
-CREATE TABLE "systems"
+CREATE TABLE "alert_systems"
 (
-    "id"           serial PRIMARY KEY NOT NULL,
-    "hostname"     text,
-    "address"      text               NOT NULL,
-    "last_seen"    timestamp
-                       with
-                       time zone,
-    "key"          text,
-    "active"       boolean DEFAULT false,
-    "expires"      timestamp
-                       with
-                       time zone,
-    "token"        text,
-    "label"        text               NOT NULL,
-    "cpu"          text,
-    "os"           text,
-    "kernal"       text,
-    "cpu_count"    integer,
-    "cpu_usage"    double precision,
-    "uptime"       integer,
-    "memory_used"  bigint,
-    "memory_total" bigint,
-    "admin"        integer,
-    CONSTRAINT "systems_hostname_key" UNIQUE ("hostname")
+    "rule_id"   integer NOT NULL,
+    "system_id" integer NOT NULL
 );
 
-CREATE TABLE "users"
+CREATE TABLE "alert_history"
 (
-    "id"             integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (
-        sequence name "users_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
+    "id"     integer GENERATED ALWAYS AS IDENTITY (
+        sequence name "alert_history_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START
             WITH
             1 CACHE 1
         ),
-    "email"          text NOT NULL,
-    "password"       text NOT NULL,
-    "admin"          boolean DEFAULT false,
-    "email_verified" boolean DEFAULT false,
-    "totp_key"       "bytea",
-    "recovery_code"  text
+    "system" integer       NOT NULL,
+    "alert"  integer       NOT NULL,
+    "date"   timestamp
+                 with
+                 time zone NOT NULL
 );
 
 ALTER TABLE "alert_history"
@@ -225,6 +248,11 @@ CREATE INDEX IF NOT EXISTS "gpus_system_id_idx" ON "gpus" ("system_id");
 CREATE INDEX IF NOT EXISTS "gpu_metrics_time_gpu_idx" ON "gpu_metrics" USING btree ("time", "gpu_id");
 ALTER TABLE "gpu_metrics"
     ADD CONSTRAINT gpu_metrics_gpu_id_fk FOREIGN KEY ("gpu_id") REFERENCES "public"."gpus" ("id") ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS "containers_system_id_idx" ON "containers" ("system_id");
+CREATE INDEX IF NOT EXISTS "container_metrics_time_gpu_idx" ON "container_metrics" USING btree ("time", "container_id");
+ALTER TABLE "container_metrics"
+    ADD CONSTRAINT container_metrics_gpu_id_fk FOREIGN KEY ("container_id") REFERENCES "public"."containers" ("id") ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS "metrics_time_idx"
     ON "metrics" USING btree ("time" timestamptz_ops);

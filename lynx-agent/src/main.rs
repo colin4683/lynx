@@ -1,6 +1,9 @@
 mod lib;
 mod proto;
+use crate::lib::client::{handle_collector_requests, AuthInterceptor, GrpcClient, LynxConfig};
+use crate::lib::collectors::CollectorRequest;
 use crate::lib::websocket::PeerMap;
+use bollard::query_parameters::ListContainersOptions;
 use dotenv::dotenv;
 use env_logger::Env;
 use futures_channel::mpsc::UnboundedSender;
@@ -15,37 +18,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::protocol::Message;
+use tonic::codegen::InterceptedService;
 use tonic::metadata::MetadataValue;
 use tonic::service::Interceptor;
+use tonic::transport::ClientTlsConfig;
 use tonic::{Code, Status};
 
 type Tx = UnboundedSender<Message>;
-
-#[derive(Deserialize, Debug)]
-pub struct CoreConfig {
-    pub server_url: String,
-    pub agent_key: String,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct LynxConfig {
-    pub core: CoreConfig,
-}
-
-struct AuthInterceptor {
-    agent_key: String,
-}
-
-impl Interceptor for AuthInterceptor {
-    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, Status> {
-        request.metadata_mut().insert(
-            "x-agent-key",
-            MetadataValue::try_from(&self.agent_key).unwrap(),
-        );
-        Ok(request)
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
@@ -94,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             agent_key: config.core.agent_key.clone(),
         },
     );
-    let rpc_timeout = Duration::from_secs(10);
+    let mut grpc_client = GrpcClient::new(client, config, client_tls_config);
 
     // Start collectors with async mpsc
     let (tx, mut rx) = mpsc::channel::<lib::collectors::CollectorRequest>(1024);
@@ -103,31 +82,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut handles = vec![];
 
-    // // System info collector (cpu model, users, kernal, os,etc.)
-    // info!("[agent] Starting sysinfo collector...");
-    // let sysinfo_handle = tokio::spawn(lib::collectors::sysinfo_collector(tx.clone()));
-    // handles.push(sysinfo_handle);
-    //
-    // // Metric collector (cpu usage, memory usage, disk usage, etc.)
-    // info!("[agent] Starting metric collector...");
-    // let metric_handle = tokio::spawn(lib::collectors::metric_collector(tx.clone()));
-    // handles.push(metric_handle);
-    //
-    // // Systemctl collector (Linux only - get systemd services status)
-    // //let cache = Arc::new(lib::cache::FastCache::new("sqlite://./cache.db", true).await?);
-    // #[cfg(target_os = "linux")]
-    // {
-    //     info!("[agent] Starting systemctl collector...");
-    //     let systemctl_handle = tokio::spawn(lib::collectors::systemctl_collector(tx.clone()));
-    //     handles.push(systemctl_handle);
-    //
-    //     /*// Cleanup task for the systemctl cache
-    //      let cache_cleanup_handle = tokio::spawn(lib::cache::start_cleanup_task(
-    //          cache.clone(),
-    //          Duration::from_secs(7 * 60),
-    //      ));
-    //     // handles.push(cache_cleanup_handle);*/
-    // }
     let state = PeerMap::new(tokio::sync::Mutex::new(HashMap::new()));
 
     // WebSocket server for real-time updates
@@ -142,211 +96,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.retain(|handle| {
             if handle.is_finished() {
                 info!("[agent] A background task has finished.");
-                false // Remove finished handle
+                false // Remove a finished handle
             } else {
-                true // Keep running handle
+                true // Keep a running handle
             }
         });
 
         tokio::select! {
             Some(request) = rx.recv() => {
-                match request {
-                    lib::collectors::CollectorRequest::SystemInfo(system_info) => {
-                        info!("[agent] Sending system info to hub...");
-                        let request = tonic::Request::new(system_info);
-                        // Enforce timeout and reconnect on stall
-                        match timeout(rpc_timeout, client.get_system_info(request)).await {
-                            Ok(Ok(response)) => {
-                                let resp = response.into_inner();
-                                if resp.status == "200" {
-                                    info!("[agent] Successfully sent system info to hub");
-                                } else {
-                                    info!("[agent] Failed to send system info to hub: {:?}", resp.message);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!("[agent] Error sending system info: {}", e);
-                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
-                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
-                                    let endpoint = make_client(&config, client_tls_config.clone())?;
-                                    let channel = endpoint.connect().await?;
-                                    client = SystemMonitorClient::with_interceptor(
-                                        channel,
-                                        AuthInterceptor {
-                                            agent_key: config.core.agent_key.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                error!("[agent] Timeout sending system info to hub; reconnecting");
-                                let endpoint = make_client(&config, client_tls_config.clone())?;
-                                let channel = endpoint.connect().await?;
-                                client = SystemMonitorClient::with_interceptor(
-                                    channel,
-                                    AuthInterceptor {
-                                        agent_key: config.core.agent_key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    lib::collectors::CollectorRequest::GpuInfo(gpu_info) => {
-                        info!("[agent] Sending GPU info to hub...");
-                        let request = tonic::Request::new(gpu_info);
-                        match timeout(rpc_timeout, client.register_gp_us(request)).await {
-                            Ok(Ok(response)) => {
-                                let resp = response.into_inner();
-                                if resp.status == "200" {
-                                    info!("[agent] Successfully sent GPU info to hub");
-                                } else {
-                                    info!("[agent] Failed to send GPU info to hub: {:?}", resp.message);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!("[agent] Error sending GPU info: {}", e);
-                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
-                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
-                                    let endpoint = make_client(&config, client_tls_config.clone())?;
-                                    let channel = endpoint.connect().await?;
-                                    client = SystemMonitorClient::with_interceptor(
-                                        channel,
-                                        AuthInterceptor {
-                                            agent_key: config.core.agent_key.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                error!("[agent] Timeout sending GPU info to hub; reconnecting");
-                                let endpoint = make_client(&config, client_tls_config.clone())?;
-                                let channel = endpoint.connect().await?;
-                                client = SystemMonitorClient::with_interceptor(
-                                    channel,
-                                    AuthInterceptor {
-                                        agent_key: config.core.agent_key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    lib::collectors::CollectorRequest::GpuMetrics(gpu_metrics) => {
-                        info!("[agent] Sending GPU metrics to hub...");
-                        let request = tonic::Request::new(gpu_metrics);
-                        match timeout(rpc_timeout, client.report_gpu_metrics(request)).await {
-                            Ok(Ok(response)) => {
-                                let resp = response.into_inner();
-                                if resp.status == "200" {
-                                    info!("[agent] Successfully sent GPU metrics to hub");
-                                } else {
-                                    info!("[agent] Failed to send GPU metrics to hub: {:?}", resp.message);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!("[agent] Error sending GPU metrics: {}", e);
-                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
-                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
-                                    let endpoint = make_client(&config, client_tls_config.clone())?;
-                                    let channel = endpoint.connect().await?;
-                                    client = SystemMonitorClient::with_interceptor(
-                                        channel,
-                                        AuthInterceptor {
-                                            agent_key: config.core.agent_key.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                error!("[agent] Timeout sending GPU metrics to hub; reconnecting");
-                                let endpoint = make_client(&config, client_tls_config.clone())?;
-                                let channel = endpoint.connect().await?;
-                                client = SystemMonitorClient::with_interceptor(
-                                    channel,
-                                    AuthInterceptor {
-                                        agent_key: config.core.agent_key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    lib::collectors::CollectorRequest::Metrics(metrics) => {
-                        info!("[agent] Sending metrics to hub...");
-                        let request = tonic::Request::new(metrics);
-                        match timeout(rpc_timeout, client.report_metrics(request)).await {
-                            Ok(Ok(response)) => {
-                                let resp = response.into_inner();
-                                if resp.status == "200" {
-                                    info!("[agent] Successfully sent metrics to hub");
-                                } else {
-                                    info!("[agent] Failed to send metrics to hub: {:?}", resp.message);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!("[agent] Error sending metrics: {}", e);
-                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
-                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
-                                    let endpoint = make_client(&config, client_tls_config.clone())?;
-                                    let channel = endpoint.connect().await?;
-                                    client = SystemMonitorClient::with_interceptor(
-                                        channel,
-                                        AuthInterceptor {
-                                            agent_key: config.core.agent_key.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                error!("[agent] Timeout sending metrics to hub; reconnecting");
-                                let endpoint = make_client(&config, client_tls_config.clone())?;
-                                let channel = endpoint.connect().await?;
-                                client = SystemMonitorClient::with_interceptor(
-                                    channel,
-                                    AuthInterceptor {
-                                        agent_key: config.core.agent_key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    lib::collectors::CollectorRequest::Systemctl(systemctl) => {
-                        info!("[agent] Sending systemctl services to the hub");
-                        let request = tonic::Request::new(systemctl);
-                        match timeout(rpc_timeout, client.report_systemctl(request)).await {
-                            Ok(Ok(response)) => {
-                                let resp = response.into_inner();
-                                if resp.status == "200" {
-                                    info!("[agent] Successfully sent systemctl services to hub");
-                                } else {
-                                    info!("[agent] Failed to send systemctl services to hub: {:?}", resp.message);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!("[agent] Error sending systemctl services to hub: {}", e);
-                                if e.code() == Code::Unavailable || e.code() == Code::DeadlineExceeded {
-                                    error!("[agent] Reconnecting gRPC client after error: {:?}", e.code());
-                                    let endpoint = make_client(&config, client_tls_config.clone())?;
-                                    let channel = endpoint.connect().await?;
-                                    client = SystemMonitorClient::with_interceptor(
-                                        channel,
-                                        AuthInterceptor {
-                                            agent_key: config.core.agent_key.clone(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                error!("[agent] Timeout sending systemctl services to hub; reconnecting");
-                                let endpoint = make_client(&config, client_tls_config.clone())?;
-                                let channel = endpoint.connect().await?;
-                                client = SystemMonitorClient::with_interceptor(
-                                    channel,
-                                    AuthInterceptor {
-                                        agent_key: config.core.agent_key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
+                if let Err(e) = handle_collector_requests(&mut grpc_client, request).await {
+                    error!("[agent] Error handling collector request: {}", e);
                 }
             }
             else => {

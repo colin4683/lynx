@@ -3,11 +3,13 @@ syntax = "proto3";
 package monitor;
 
 service SystemMonitor {
-    rpc ReportMetrics (MetricsRequest) returns (MetricsResponse);
-    rpc RegisterGPUs (GpuRequest) returns (GpuResponse);
-    rpc ReportGPUMetrics (GpuMetricsRequest) returns (GpuResponse);
-    rpc GetSystemInfo (SystemInfoRequest) returns (SystemInfoResponse);
-    rpc ReportSystemctl (SystemctlRequest) returns (SystemctlResponse);
+    rpc GetSystemInfo (SystemInfoRequest) returns (Response);
+    rpc ReportMetrics (MetricsRequest) returns (Response);
+    rpc ReportSystemctl (SystemctlRequest) returns (Response);
+    rpc RegisterGPUs (GpuRequest) returns (Response);
+    rpc ReportGPUMetrics (GpuMetricsRequest) returns (Response);
+    rpc RegisterContainers (ContainerRequest) returns (Response);
+    rpc ReportContainerMetrics (ContainerMetricsRequest) returns (Response);
 }
 
 message SystemInfoRequest {
@@ -36,6 +38,14 @@ message GpuMetricsRequest {
     repeated GpuMetrics gpu_metrics = 1;
 }
 
+message ContainerRequest {
+    repeated ContainerInfo containers = 1;
+}
+
+message ContainerMetricsRequest {
+    repeated ContainerMetrics container_metrics = 1;
+}
+
 message SystemctlRequest {
     repeated SystemService services = 1;
 }
@@ -60,6 +70,15 @@ message GpuResponse {
 }
 
 
+message ContainerResponse {
+    string status = 1;
+    string message = 2;
+}
+
+message Response {
+    string status = 1;
+    string message = 2;
+}
 
 message CpuStats {
     double usage_percent = 1;
@@ -123,4 +142,16 @@ message GpuInfo {
     string pci_bus = 4;
     string driver = 5;
     uint64 memory_total_mb = 6;
+}
+
+message ContainerMetrics {
+    string docker_id = 1;
+    double cpu_usage = 2;
+    double memory_usage = 3;
+}
+
+message ContainerInfo {
+    string docker_id = 1;
+    string name = 2;
+    string state = 3;
 }
