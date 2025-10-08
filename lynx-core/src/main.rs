@@ -6,6 +6,8 @@ mod proto;
 mod services;
 mod tls; // added cache module
 
+mod retention;
+
 mod queries;
 
 use crate::cache::Cache;
@@ -24,16 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load env and initialize logging
     config::load_env();
     config::init_logging();
+    let cfg = config::Config::from_env()?;
     info!("[hub] Starting Lynx Hub...");
 
     // Validate database URL
-    let database_url = match config::database_url() {
-        Ok(url) => url,
-        Err(_) => {
-            error!("[hub] DATABASE_URL environment variable is not set.");
-            std::process::exit(1);
-        }
-    };
+    let database_url = cfg.database_url;
     // Setup DB
     let db_pool = match db::setup_db(&database_url).await {
         Ok(pool) => {
@@ -64,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         info!("[hub] Cache snapshot loaded");
     }
+
     // periodic snapshot task
     {
         let cache_clone = cache.clone();
@@ -97,6 +95,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pool_clone = db_pool.clone();
         tokio::spawn(async move {
             run_metric_worker(metric_rx, pool_clone).await;
+        });
+    }
+
+    // retention policy task
+    {
+        let pool_clone = db_pool.clone();
+        let retention_days = cfg.retention_days;
+        tokio::spawn(async move {
+            if retention_days <= 0 {
+                log::warn!("[retention] Retention policy is disabled");
+                return;
+            }
+            log::warn!(
+                "[retention] Retention policy active: {} days",
+                retention_days
+            );
+            let mut tick = interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = retention::prune_old_metrics(&pool_clone, retention_days).await {
+                    log::warn!("[retention] Prune failed: {e}");
+                }
+            }
         });
     }
 
