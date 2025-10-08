@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::proto::monitor::SystemService;
@@ -65,11 +66,19 @@ struct CacheSnapshot {
     logs: Vec<LogEntry>,
 }
 
+#[derive(Debug, Clone)]
+struct SystemIdEntry {
+    id: i32,
+    inserted: Instant,
+}
+
 #[derive(Clone)]
 pub struct Cache {
     services: Arc<DashMap<String, SystemService>>,
     config_changes: Arc<RwLock<Vec<ConfigChange>>>,
     logs: Arc<RwLock<Vec<LogEntry>>>,
+    system_ids: DashMap<String, SystemIdEntry>,
+    system_id_ttl: Duration,
     max_logs: usize,
     max_config_changes: usize,
 }
@@ -80,9 +89,35 @@ impl Cache {
             services: Arc::new(DashMap::new()),
             config_changes: Arc::new(RwLock::new(Vec::new())),
             logs: Arc::new(RwLock::new(Vec::new())),
+            system_ids: DashMap::new(),
+            system_id_ttl: Duration::from_secs(300),
             max_logs,
             max_config_changes,
         }
+    }
+    pub fn get_system_id(&self, key: &str) -> Option<i32> {
+        if let Some(e) = self.system_ids.get(key) {
+            if e.inserted.elapsed() <= self.system_id_ttl {
+                return Some(e.id);
+            }
+        }
+        None
+    }
+    pub fn evict_expired_system_ids(&self) {
+        let ttl = self.system_id_ttl;
+        let now = Instant::now();
+        self.system_ids
+            .retain(|_, v| now.duration_since(v.inserted) <= ttl);
+    }
+
+    pub fn put_system_id(&self, key: String, id: i32) {
+        self.system_ids.insert(
+            key,
+            SystemIdEntry {
+                id,
+                inserted: Instant::now(),
+            },
+        );
     }
 
     pub fn upsert_service(&self, svc: SystemService) {
