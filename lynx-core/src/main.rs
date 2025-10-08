@@ -10,10 +10,13 @@ mod queries;
 
 use crate::cache::Cache;
 use crate::proto::monitor::system_monitor_server::SystemMonitorServer;
+use crate::services::ingest::run_metric_worker;
+use crate::services::ingest::MetricIngestItem;
 use crate::services::monitor::MyMonitor;
 use log::{error, info};
 use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::sync::mpsc::channel;
 use tokio::time::interval;
 
 #[tokio::main]
@@ -75,9 +78,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    // cache evict task
+    {
+        let cache_clone = cache.clone();
+        tokio::spawn(async move {
+            let mut tick = interval(Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                cache_clone.evict_expired_system_ids();
+            }
+        });
+    }
+
+    // ingest worker
+    let (metric_tx, metric_rx) = channel::<MetricIngestItem>(10_000);
+    {
+        let pool_clone = db_pool.clone();
+        tokio::spawn(async move {
+            run_metric_worker(metric_rx, pool_clone).await;
+        });
+    }
+
     let monitor = MyMonitor {
         pool: db_pool.clone(),
         cache: cache.clone(),
+        metric_tx,
     };
     let addr = SocketAddr::from(([0, 0, 0, 0], 50051));
     info!("[hub] gRPC server starting on https://{addr}");

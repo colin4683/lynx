@@ -257,6 +257,12 @@ ALTER TABLE "container_metrics"
 CREATE INDEX IF NOT EXISTS "metrics_time_idx"
     ON "metrics" USING btree ("time" timestamptz_ops);
 
+
+ALTER TABLE gpus
+    ADD CONSTRAINT gpus_system_idx_key UNIQUE (system_id, gpu_index);
+ALTER TABLE containers
+    ADD CONSTRAINT containers_system_docker_key UNIQUE (system_id, docker_id);
+
 CREATE FUNCTION public.update_latest_cpu_usage() RETURNS trigger
     LANGUAGE plpgsql
 AS

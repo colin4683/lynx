@@ -1,20 +1,25 @@
-use chrono::Utc;
-use log::{error, info};
-use serde::{Deserialize, Serialize};
-use tonic::{Request, Response, Status};
-
 use crate::cache::Cache;
 use crate::proto::monitor::system_monitor_server::SystemMonitor;
 use crate::proto::monitor::{
-    ContainerMetricsRequest, ContainerRequest, ContainerResponse, GpuMetricsRequest, GpuRequest,
-    GpuResponse, MetricsRequest, MetricsResponse, Response as ProtoResponse, SystemInfoRequest,
-    SystemInfoResponse, SystemctlRequest, SystemctlResponse,
+    ContainerInfo, ContainerMetrics, ContainerMetricsRequest, ContainerRequest, ContainerResponse,
+    GpuInfo, GpuMetrics, GpuMetricsRequest, GpuRequest, GpuResponse, MetricsRequest,
+    MetricsResponse, Response as ProtoResponse, SystemInfoRequest, SystemInfoResponse,
+    SystemctlRequest, SystemctlResponse,
 };
+use crate::services::ingest::{DiskEntry, MetricIngestItem};
+use chrono::Utc;
+use log::{error, info};
+use serde::{Deserialize, Serialize};
+use sqlx::QueryBuilder;
+use tokio::sync::mpsc::Sender;
+use tonic::metadata::MetadataMap;
+use tonic::{Request, Response, Status};
 
 #[derive(Clone)]
 pub struct MyMonitor {
     pub pool: sqlx::PgPool,
     pub cache: Cache,
+    pub metric_tx: Sender<MetricIngestItem>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,119 +28,275 @@ struct ComponentJSON {
     temperature: f32,
 }
 
+impl MyMonitor {
+    async fn get_system_id_from_md(&self, md: &MetadataMap) -> Result<i32, Status> {
+        let agent_key = md
+            .get("x-agent-key")
+            .ok_or(Status::unauthenticated("Missing key"))?
+            .to_str()
+            .map_err(|_| Status::invalid_argument("Invalid key"))?;
+
+        if let Some(id) = self.cache.get_system_id(agent_key) {
+            return Ok(id);
+        }
+
+        let rec = sqlx::query!(
+            r#"SELECT id FROM systems WHERE key = $1 AND active = true"#,
+            agent_key
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] DB system lookup error: {e}");
+            Status::internal("Database error")
+        })?
+        .ok_or(Status::unauthenticated("Invalid or inactive agent key"))?;
+
+        self.cache.put_system_id(agent_key.to_string(), rec.id);
+        Ok(rec.id)
+    }
+
+    async fn upsert_gpus(&self, system_id: i32, gpus: Vec<GpuInfo>) -> Result<(), Status> {
+        if gpus.is_empty() {
+            return Ok(());
+        }
+
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO gpus (system_id, gpu_index, uuid, name, pci_bus, driver, memory_total_mb) ",
+        );
+        qb.push_values(gpus.iter(), |mut b, g| {
+            b.push_bind(system_id)
+                .push_bind(g.gpu_index as i32)
+                .push_bind(&g.uuid)
+                .push_bind(&g.name)
+                .push_bind(&g.pci_bus)
+                .push_bind(&g.driver)
+                .push_bind(g.memory_total_mb as i64);
+        });
+        qb.push(
+            " ON CONFLICT (system_id, gpu_index) DO UPDATE SET \
+              uuid = EXCLUDED.uuid, name = EXCLUDED.name, pci_bus = EXCLUDED.pci_bus, \
+              driver = EXCLUDED.driver, memory_total_mb = EXCLUDED.memory_total_mb",
+        );
+
+        qb.build().execute(&self.pool).await.map_err(|e| {
+            error!("[hub] GPU upsert error: {e}");
+            Status::internal("gpu upsert failed")
+        })?;
+        Ok(())
+    }
+
+    async fn insert_gpu_metrics(
+        &self,
+        system_id: i32,
+        metrics: Vec<GpuMetrics>,
+    ) -> Result<(), Status> {
+        if metrics.is_empty() {
+            return Ok(());
+        }
+        // Resolve gpu ids in one query
+        let idxs: Vec<i32> = metrics.iter().map(|m| m.gpu_index as i32).collect();
+        let rows = sqlx::query!(
+            "SELECT id, gpu_index FROM gpus WHERE system_id = $1 AND gpu_index = ANY($2)",
+            system_id,
+            &idxs
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] GPU id preload error: {e}");
+            Status::internal("gpu id preload failed")
+        })?;
+        let mut id_map = std::collections::HashMap::new();
+        for r in rows {
+            id_map.insert(r.gpu_index, r.id);
+        }
+
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO gpu_metrics (gpu_id, time, utilization, memory_used_mb, temperature, power) ",
+        );
+        let now = Utc::now();
+        let mut any = false;
+        qb.push_values(
+            metrics
+                .iter()
+                .filter_map(|m| id_map.get(&(m.gpu_index as i32)).map(|gpu_id| (gpu_id, m))),
+            |mut b, (gpu_id, m)| {
+                any = true;
+                b.push_bind(*gpu_id)
+                    .push_bind(now)
+                    .push_bind(m.utilization)
+                    .push_bind(m.memory_used_mb as i64)
+                    .push_bind(m.temperature)
+                    .push_bind(m.power);
+            },
+        );
+        if !any {
+            return Ok(());
+        }
+        qb.build().execute(&self.pool).await.map_err(|e| {
+            error!("[hub] GPU metrics insert error: {e}");
+            Status::internal("gpu metrics insert failed")
+        })?;
+        Ok(())
+    }
+
+    async fn upsert_containers(
+        &self,
+        system_id: i32,
+        containers: Vec<ContainerInfo>,
+    ) -> Result<(), Status> {
+        if containers.is_empty() {
+            return Ok(());
+        }
+
+        let mut qb =
+            QueryBuilder::new("INSERT INTO containers (system_id, docker_id, name, state) ");
+        qb.push_values(containers.iter(), |mut b, c| {
+            b.push_bind(system_id)
+                .push_bind(&c.docker_id)
+                .push_bind(&c.name)
+                .push_bind(&c.state);
+        });
+        qb.push(
+            " ON CONFLICT (system_id, docker_id) DO UPDATE SET \
+              name = EXCLUDED.name, state = EXCLUDED.state",
+        );
+        qb.build().execute(&self.pool).await.map_err(|e| {
+            error!("[hub] Container upsert error: {e}");
+            Status::internal("container upsert failed")
+        })?;
+        Ok(())
+    }
+
+    async fn insert_container_metrics(
+        &self,
+        system_id: i32,
+        metrics: Vec<ContainerMetrics>,
+    ) -> Result<(), Status> {
+        if metrics.is_empty() {
+            return Ok(());
+        }
+
+        // Collect owned Strings to match expected &\[String]
+        let ids: Vec<String> = metrics.iter().map(|m| m.docker_id.clone()).collect();
+
+        let rows = sqlx::query!(
+            "SELECT id, docker_id FROM containers WHERE system_id = $1 AND docker_id = ANY($2)",
+            system_id,
+            &ids
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            error!("[hub] Container id preload error: {e}");
+            Status::internal("container id preload failed")
+        })?;
+
+        let mut id_map = std::collections::HashMap::new();
+        for r in rows {
+            id_map.insert(r.docker_id, r.id);
+        }
+
+        let mut qb = QueryBuilder::new(
+            "INSERT INTO container_metrics (container_id, time, cpu_usage, memory_usage) ",
+        );
+        let now = Utc::now();
+        let mut any = false;
+        qb.push_values(
+            metrics
+                .iter()
+                .filter_map(|m| id_map.get(&m.docker_id).map(|cid| (cid, m))),
+            |mut b, (cid, m)| {
+                any = true;
+                b.push_bind(*cid)
+                    .push_bind(now)
+                    .push_bind(m.cpu_usage)
+                    .push_bind(m.memory_usage);
+            },
+        );
+        if !any {
+            return Ok(());
+        }
+        qb.build().execute(&self.pool).await.map_err(|e| {
+            error!("[hub] Container metrics insert error: {e}");
+            Status::internal("container metrics insert failed")
+        })?;
+        Ok(())
+    }
+}
+
 #[tonic::async_trait]
 impl SystemMonitor for MyMonitor {
     async fn report_metrics(
         &self,
         request: Request<MetricsRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
 
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-        if valid.is_none() {
-            error!("[hub] Invalid system for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
         let metrics = request.into_inner();
+        let cpu = metrics
+            .cpu_stats
+            .ok_or(Status::invalid_argument("missing cpu_stats"))?;
+        let mem = metrics
+            .memory_stats
+            .ok_or(Status::invalid_argument("missing memory_stats"))?;
+        let net = metrics
+            .network_stats
+            .ok_or(Status::invalid_argument("missing network_stats"))?;
+        let load = metrics
+            .load_average
+            .ok_or(Status::invalid_argument("missing load_average"))?;
+
+        let components_json = serde_json::to_string(
+            &metrics
+                .components
+                .iter()
+                .map(|c| ComponentJSON {
+                    label: c.label.clone(),
+                    temperature: c.temperature,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or("[]".to_string());
+
+        // single timestamp for all
+        let now = Utc::now();
 
         // spawn thread to process notification rules
-        let metrics_thread = metrics.clone();
-        let pool_clone = self.pool.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                crate::notify::process_notification(&metrics_thread, system.id, &pool_clone).await
-            {
-                error!("[hub] Failed to process notification rules: {}", e);
-            }
-        });
-
-        let components = metrics
-            .components
-            .iter()
-            .map(|c| ComponentJSON {
-                label: c.label.clone(),
-                temperature: c.temperature,
-            })
-            .collect::<Vec<_>>();
-        let components_json = serde_json::to_string(&components).map_err(|e| {
-            error!("[hub] Failed to serialize component list: {}", e);
-            Status::internal("Serialization error")
-        })?;
-
-        let network_stats = metrics.network_stats.unwrap();
-        let loads = metrics.load_average.unwrap();
-
-        sqlx::query!(
-            r#"
-            INSERT INTO metrics (time, system_id, cpu_usage, memory_used_kb, memory_total_kb, components, net_in, net_out, load_one, load_five, load_fifteen)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            "#,
-            Utc::now(),
-            system.id,
-            metrics.cpu_stats.unwrap().usage_percent,
-            metrics.memory_stats.unwrap().used_kb as i64,
-            metrics.memory_stats.unwrap().total_kb as i64,
-            components_json,
-            network_stats.r#in as i64,
-            network_stats.r#out as i64,
-            loads.one_minute,
-            loads.five_minutes,
-            loads.fifteen_minutes
-        )
-            .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to insert metric log: {e:?}");
-                Status::internal("Database error")
-            })?;
-
-        // store disks
         let disks = metrics
             .disk_stats
-            .into_iter()
-            .map(|disk| {
-                sqlx::query!(
-                    r#"
-                INSERT INTO disks (time, system, name, space, used, read, write, unit, mount_point)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                "#,
-                    Utc::now(),
-                    system.id,
-                    disk.name,
-                    disk.total_space as i64,
-                    disk.used_space as i64,
-                    disk.read_bytes as f64,
-                    disk.write_bytes as f64,
-                    disk.unit,
-                    disk.mount_point
-                )
+            .iter()
+            .map(|d| DiskEntry {
+                name: d.name.clone(),
+                total_space: d.total_space as i64,
+                used_space: d.used_space as i64,
+                read_bytes: d.read_bytes,
+                write_bytes: d.write_bytes,
+                unit: d.unit.clone(),
+                mount_point: d.mount_point.clone(),
             })
             .collect::<Vec<_>>();
 
-        for disk_query in disks {
-            disk_query.execute(&self.pool).await.map_err(|e| {
-                error!("[hub] Failed to insert disk: {e:?}");
-                Status::internal("Database error")
-            })?;
+        let item = MetricIngestItem {
+            system_id,
+            time: now,
+            cpu_usage: cpu.usage_percent,
+            memory_used_kb: mem.used_kb as i64,
+            memory_total_kb: mem.total_kb as i64,
+            components_json,
+            net_in: net.r#in as i64,
+            net_out: net.out as i64,
+            load_one: load.one_minute,
+            load_five: load.five_minutes,
+            load_fifteen: load.fifteen_minutes,
+            disks,
+            original: metrics,
+        };
+
+        if let Err(e) = self.metric_tx.try_send(item) {
+            error!("[hub] metric queue full: {e}");
+            return Err(Status::resource_exhausted("ingest queue full"));
         }
 
         info!("[hub] Metric log successfully saved");
@@ -154,97 +315,10 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<GpuRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
         let request = request.into_inner();
-
-        for gpu in request.gpus {
-            let existing = sqlx::query!(
-                r#"SELECT id FROM gpus WHERE system_id = $1 AND gpu_index = $2"#,
-                system.id,
-                gpu.gpu_index as i32
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to query existing GPU: {e:?}");
-                Status::internal("Database error")
-            })?;
-
-            if let Some(existing_gpu) = existing {
-                // update existing GPU
-                sqlx::query!(
-                    r#"
-                    UPDATE gpus
-                    SET name = $1,
-                        pci_bus = $2,
-                        memory_total_mb = $3,
-                        driver = $4
-                    WHERE id = $5
-                    "#,
-                    gpu.name,
-                    gpu.pci_bus,
-                    gpu.memory_total_mb as i32,
-                    gpu.driver,
-                    existing_gpu.id
-                )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to update GPU: {e:?}");
-                    Status::internal("Database error")
-                })?;
-                continue;
-            } else {
-                sqlx::query!(
-                    r#"
-                    INSERT INTO gpus (system_id, gpu_index, uuid, name, pci_bus, memory_total_mb, driver)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    "#,
-                    system.id,
-                    gpu.gpu_index as i32,
-                    gpu.uuid,
-                    gpu.name,
-                    gpu.pci_bus,
-                    gpu.memory_total_mb as i32,
-                    gpu.driver
-                )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to insert GPU: {e:?}");
-                    Status::internal("Database error")
-                })?;
-            }
-        }
-
+        self.upsert_gpus(system_id.into(), request.gpus).await?;
         info!("[hub] GPU list updated successfully");
-
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "GPUs reported successfully".to_string(),
@@ -255,76 +329,10 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<GpuMetricsRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
         let request = request.into_inner();
-
-        for metric in request.gpu_metrics {
-            let gpu = sqlx::query!(
-                r#"SELECT id FROM gpus WHERE system_id = $1 AND gpu_index = $2"#,
-                system.id,
-                metric.gpu_index as i32
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to query GPU for metrics: {e:?}");
-                Status::internal("Database error")
-            })?;
-
-            if gpu.is_none() {
-                error!(
-                    "[hub] No GPU found for system {} with index {}",
-                    system.id, metric.gpu_index
-                );
-                continue;
-            }
-            let gpu = gpu.unwrap();
-
-            sqlx::query!(
-                r#"
-                INSERT INTO gpu_metrics (time, gpu_id, temperature, memory_used_mb, utilization, power)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-                Utc::now(),
-                gpu.id,
-                metric.temperature,
-                metric.memory_used_mb as i32,
-                metric.utilization,
-                metric.power
-            )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to insert GPU metric: {e:?}");
-                    Status::internal("Database error")
-                })?;
-        }
+        self.insert_gpu_metrics(system_id.into(), request.gpu_metrics)
+            .await?;
         info!("[hub] GPU metrics updated successfully");
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
@@ -336,33 +344,7 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<SystemInfoRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
         let system_request = request.into_inner();
 
         sqlx::query!(
@@ -382,7 +364,7 @@ impl SystemMonitor for MyMonitor {
             system_request.kernel_version,
             system_request.cpu_model,
             system_request.cpu_count as i32,
-            system.id
+            system_id as i32
         )
         .execute(&self.pool)
         .await
@@ -403,33 +385,7 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<SystemctlRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
         let request = request.into_inner();
         let services = request.services;
         for service in services {
@@ -438,7 +394,7 @@ impl SystemMonitor for MyMonitor {
 
             let existing = sqlx::query!(
                 r#"SELECT id FROM services WHERE system = $1 AND name = $2"#,
-                system.id,
+                system_id,
                 service.service_name
             )
             .fetch_optional(&self.pool)
@@ -480,7 +436,7 @@ impl SystemMonitor for MyMonitor {
                     INSERT INTO services (system, name, description, state, pid, cpu, memory)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     "#,
-                    system.id,
+                    system_id,
                     service.service_name,
                     service.description,
                     service.state,
@@ -511,77 +467,10 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<ContainerRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
-        let request = request.into_inner();
-
-        for container in request.containers {
-            let existing = sqlx::query!(
-                r#"SELECT id FROM containers WHERE system_id = $1 AND docker_id = $2"#,
-                system.id,
-                container.docker_id
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to query existing GPU: {e:?}");
-                Status::internal("Database error")
-            })?;
-
-            if let Some(existing_container) = existing {
-                sqlx::query!(
-                    r#"UPDATE containers SET name = $1, state = $2 WHERE id = $3"#,
-                    container.name,
-                    container.state,
-                    existing_container.id
-                )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to update container: {e:?}");
-                    Status::internal("Database error")
-                })?;
-            } else {
-                sqlx::query!(
-                    r#"INSERT INTO containers (system_id, docker_id, name, state) VALUES ($1, $2, $3, $4)"#,
-                    system.id,
-                    container.docker_id,
-                    container.name,
-                    container.state
-                )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to insert container: {e:?}");
-                    Status::internal("Database error")
-                })?;
-            }
-        }
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
+        let body = request.into_inner();
+        self.upsert_containers(system_id.into(), body.containers)
+            .await?;
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "Containers reported successfully".to_string(),
@@ -592,68 +481,11 @@ impl SystemMonitor for MyMonitor {
         &self,
         request: Request<ContainerMetricsRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
-        let agent_key = request
-            .metadata()
-            .get("x-agent-key")
-            .ok_or(Status::unauthenticated("Missing key"))?
-            .to_str()
-            .map_err(|e| {
-                error!("[hub] Authorization failed for agent: {e:?}");
-                Status::invalid_argument("Invalid key")
-            })?;
-
-        let valid = sqlx::query!(
-            r#"SELECT id, cpu, hostname FROM systems WHERE key = $1 AND active = true"#,
-            agent_key
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| {
-            error!("[hub] Failed to find active agent for key: {:?}", agent_key);
-            Status::internal(format!("Database error: {}", e))
-        })?;
-
-        if valid.is_none() {
-            error!("[hub] No system info found for agent key: {:?}", agent_key);
-            return Err(Status::unauthenticated("Invalid or inactive agent key"));
-        }
-
-        let system = valid.unwrap();
-        let request = request.into_inner();
-        for metric in request.container_metrics {
-            let container = sqlx::query!(
-                r#"SELECT id FROM containers WHERE system_id = $1 AND docker_id = $2"#,
-                system.id,
-                metric.docker_id
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| {
-                error!("[hub] Failed to fetch container for metrics: {e:?}");
-                Status::internal("Database error")
-            })?;
-
-            if container.is_none() {
-                error!(
-                    "[hub] No container found fo rmetrics: {:?}",
-                    metric.docker_id
-                );
-                continue;
-            }
-
-            sqlx::query!(
-                r#"INSERT INTO container_metrics (container_id, cpu_usage, memory_usage) VALUES ($1, $2, $3)"#,
-                container.unwrap().id,
-                metric.cpu_usage,
-                metric.memory_usage
-            )
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    error!("[hub] Failed to insert metric for container: {e:?}");
-                    Status::internal("Database error")
-                })?;
-        }
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
+        let body = request.into_inner();
+        self.insert_container_metrics(system_id.into(), body.container_metrics)
+            .await?;
+        info!("[hub] Container metrics updated successfully");
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "Container metrics successfully".to_string(),
