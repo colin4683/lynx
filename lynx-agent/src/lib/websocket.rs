@@ -1,9 +1,13 @@
 use crate::lib;
 use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
 use log::{error, info, warn};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
+use std::fs::File;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +18,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{self, channel, Receiver, Sender};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::interval;
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::error::ProtocolError::{HandshakeIncomplete, WrongHttpMethod};
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 use uuid::Uuid;
@@ -45,15 +50,52 @@ enum WsMessage {
     #[serde(rename = "live")]
     Live,
     #[serde(rename = "startservice")]
-    StartService { service_name: String },
+    StartService {
+        service_name: String,
+        origin: String,
+    },
     #[serde(rename = "stopservice")]
-    StopService { service_name: String },
+    StopService {
+        service_name: String,
+        origin: String,
+    },
     #[serde(rename = "restartservice")]
-    RestartService { service_name: String },
+    RestartService {
+        service_name: String,
+        origin: String,
+    },
     #[serde(rename = "output")]
     Output(String),
     #[serde(rename = "EOF")]
     EOF,
+}
+
+fn load_certs(path: &str) -> Vec<CertificateDer<'static>> {
+    let certfile = std::fs::File::open(path).unwrap();
+    let mut reader = std::io::BufReader::new(certfile);
+    rustls_pemfile::certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+
+fn load_private_key(path: &str) -> PrivateKeyDer<'static> {
+    let keyfile = std::fs::File::open(path).unwrap();
+    let mut reader = std::io::BufReader::new(keyfile);
+    rustls_pemfile::pkcs8_private_keys(&mut reader)
+        .next()
+        .unwrap()
+        .unwrap()
+        .into()
+}
+
+fn load_ca(path: &str) -> RootCertStore {
+    let mut ca = RootCertStore::empty();
+    let cafile = std::fs::File::open(path).unwrap();
+    let mut reader = std::io::BufReader::new(cafile);
+    for cert in rustls_pemfile::certs(&mut reader) {
+        ca.add(cert.unwrap()).unwrap();
+    }
+    ca
 }
 
 pub async fn stream_output(recp: Tx, child: ChildHandle, terminate_signal: Arc<Notify>) {
@@ -200,197 +242,361 @@ pub async fn start_metrics_command(addr: SocketAddr, ws_sender: Tx) -> Uuid {
 
 pub async fn start_websocket_server(peers: PeerMap) -> Result<(), Box<dyn std::error::Error>> {
     let addr = env::var("LYNX_AGENT_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-    info!("[agent] Started websocket server at {}", addr);
+    let cert_path = env::var("LYNX_CERT_PATH").unwrap_or_else(|_| "certs/agent.crt".to_string());
+    let key_path = env::var("LYNX_KEY_PATH").unwrap_or_else(|_| "certs/agent.key".to_string());
+    let ca_path = env::var("LYNX_CA_PATH").unwrap_or_else(|_| "certs/ca.crt".to_string());
+    let certs = load_certs(&cert_path);
+    let key = load_private_key(&key_path);
+    let ca_store = load_ca(&ca_path);
+
+    let config = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_client_cert_verifier(
+            WebPkiClientVerifier::builder(Arc::new(ca_store))
+                .build()
+                .map_err(|e| format!("Failed to build client cert verifier: {}", e))?,
+        )
+        .with_single_cert(certs, key)?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    info!("[agent] Started mTLS websocket server at {}", addr);
+
     let try_socket = TcpListener::bind(&addr).await;
     let listener = try_socket.expect("Failed to bind");
     let peers_clone = peers.clone();
+
     tokio::spawn(async move {
         while let Ok((stream, addr)) = listener.accept().await {
-            let ws_stream = tokio_tungstenite::accept_async(stream)
-                .await
-                .expect("Failed to accept");
+            let acceptor = acceptor.clone();
+            let peers_clone = peers_clone.clone();
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(stream).await {
+                    Ok(tls_stream) => tls_stream,
+                    Err(e) => {
+                        error!(
+                            "[mTLS] Failed to establish TLS connection with {}: {}",
+                            addr, e
+                        );
+                        return;
+                    }
+                };
 
-            info!("[ws] Connection established: {}", addr);
-            // Use a bounded channel (e.g., 64 messages) to avoid memory leaks
-            let (tx, mut rx) = channel(64);
-            peers_clone.lock().await.insert(addr, tx.clone());
+                let ws_stream = match tokio_tungstenite::accept_async(tls_stream).await {
+                    Ok(ws_stream) => ws_stream,
+                    Err(e) => {
+                        error!(
+                            "[ws] Failed to accept WebSocket connection from {}: {}",
+                            addr, e
+                        );
+                        return;
+                    }
+                };
 
-            let (mut outgoing, incoming) = ws_stream.split();
-            // Process incoming messages
-            let incoming_messages = incoming.try_for_each(|msg| {
-                if let Ok(text) = msg.to_text() {
-                    info!("[ws] Received message from {}: {}", addr, text);
-                    match serde_json::from_str::<WsMessage>(text) {
-                        Ok(WsMessage::Execute { command, args }) => {
-                            info!("[ws] Executing command: {} {:?}", command, args);
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                let process_id =
-                                    start_command(command, args, tx_clone.clone()).await;
-                                let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
-                                    "Started command with ID: {}",
-                                    process_id
-                                ))));
-                            });
-                        }
-                        Ok(WsMessage::Stop) => {
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                let mut processes = RUNNING_PROCESSES.lock().await;
-                                for (pid, (child_handle, terminate_signal)) in
-                                    processes.clone().iter()
-                                {
-                                    terminate_signal.notify_one();
-                                    if let Some(child) = child_handle.lock().await.as_mut() {
-                                        if let Err(e) = child.kill().await {
-                                            info!("[ws] Failed to stop command {}: {}", pid, e);
-                                            let _ = tx_clone.try_send(Message::Text(
-                                                Utf8Bytes::from(format!(
-                                                    "Failed to stop command {}: {}",
-                                                    pid, e
-                                                )),
-                                            ));
+                info!("[ws] mTLS connection established: {}", addr);
+                let (tx, mut rx) = channel(64);
+                peers_clone.lock().await.insert(addr, tx.clone());
+
+                let (mut outgoing, incoming) = ws_stream.split();
+                // Process incoming messages
+                let incoming_messages = incoming.try_for_each(|msg| {
+                    if let Ok(text) = msg.to_text() {
+                        info!("[ws] Received message from {}: {}", addr, text);
+                        match serde_json::from_str::<WsMessage>(text) {
+                            Ok(WsMessage::Execute { command, args }) => {
+                                info!("[ws] Executing command: {} {:?}", command, args);
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let process_id =
+                                        start_command(command, args, tx_clone.clone()).await;
+                                    let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
+                                        format!("Started command with ID: {}", process_id),
+                                    )));
+                                });
+                            }
+                            Ok(WsMessage::Stop) => {
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let mut processes = RUNNING_PROCESSES.lock().await;
+                                    for (pid, (child_handle, terminate_signal)) in
+                                        processes.clone().iter()
+                                    {
+                                        terminate_signal.notify_one();
+                                        if let Some(child) = child_handle.lock().await.as_mut() {
+                                            if let Err(e) = child.kill().await {
+                                                info!("[ws] Failed to stop command {}: {}", pid, e);
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to stop command {}: {}",
+                                                        pid, e
+                                                    )),
+                                                ));
+                                            } else {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Stopped command {}",
+                                                        pid
+                                                    )),
+                                                ));
+                                            }
                                         } else {
-                                            let _ = tx_clone.try_send(Message::Text(
-                                                Utf8Bytes::from(format!("Stopped command {}", pid)),
-                                            ));
+                                            continue;
+                                        }
+                                        processes.remove(pid);
+                                    }
+                                });
+                            }
+                            Ok(WsMessage::Update) => {
+                                // todo: Make update script
+                            }
+                            Ok(WsMessage::Delete) => {
+                                // todo: Uninstall self
+                            }
+                            Ok(WsMessage::Live) => {
+                                info!(
+                                    "[ws] Starting live relay of system metrics to agent: {}",
+                                    addr
+                                );
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let process_id =
+                                        start_metrics_command(addr, tx_clone.clone()).await;
+                                    let _ =
+                                        tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
+                                            "Started live metrics with thread ID: {}",
+                                            process_id
+                                        ))));
+                                });
+                            }
+                            Ok(WsMessage::StartService {
+                                service_name,
+                                origin,
+                            }) => {
+                                let systemctl = systemctl::SystemCtl::default();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    if origin == "systemctl" {
+                                        match systemctl.start(&service_name) {
+                                            Ok(_) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Started service: {}",
+                                                        service_name
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to start service {}: {}",
+                                                        service_name, e
+                                                    )),
+                                                ));
+                                            }
+                                        }
+                                    } else if origin == "docker" {
+                                        let docker_manager = lib::docker::DockerManager::new()
+                                            .map_err(|e| {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to start docker manager: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            })
+                                            .unwrap();
+
+                                        match docker_manager.start_container(&service_name).await {
+                                            Ok(_) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Started docker container: {}",
+                                                        service_name
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to start docker container: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                            Ok(WsMessage::StopService {
+                                service_name,
+                                origin,
+                            }) => {
+                                let systemctl = systemctl::SystemCtl::default();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    if origin == "systemctl" {
+                                        match systemctl.stop(&service_name) {
+                                            Ok(_) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Stopped service: {}",
+                                                        service_name
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to stop service {}: {}",
+                                                        service_name, e
+                                                    )),
+                                                ));
+                                            }
+                                        }
+                                    } else if origin == "docker" {
+                                        let docker_manager = lib::docker::DockerManager::new()
+                                            .map_err(|e| {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to start docker manager: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            })
+                                            .unwrap();
+
+                                        match docker_manager.stop_container(&service_name).await {
+                                            Ok(_) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Stopped docker container: {}",
+                                                        service_name
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to stop docker container: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                            Ok(WsMessage::RestartService {
+                                service_name,
+                                origin,
+                            }) => {
+                                let systemctl = systemctl::SystemCtl::default();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    if origin == "systemctl" {
+                                        match systemctl.restart(&service_name) {
+                                            Ok(status) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Restarted service: {}",
+                                                        status
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to restart service {}: {}",
+                                                        service_name, e
+                                                    )),
+                                                ));
+                                            }
+                                        }
+                                    } else if origin == "docker" {
+                                        let docker_manager = lib::docker::DockerManager::new()
+                                            .map_err(|e| {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to start docker manager: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            })
+                                            .unwrap();
+
+                                        match docker_manager.restart_container(&service_name).await
+                                        {
+                                            Ok(_) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Restarted docker container: {}",
+                                                        service_name
+                                                    )),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone.try_send(Message::Text(
+                                                    Utf8Bytes::from(format!(
+                                                        "Failed to restart docker container: {}",
+                                                        e
+                                                    )),
+                                                ));
+                                            }
                                         }
                                     } else {
-                                        continue;
-                                    }
-                                    processes.remove(pid);
-                                }
-                            });
-                        }
-                        Ok(WsMessage::Update) => {
-                            // todo: Make update script
-                        }
-                        Ok(WsMessage::Delete) => {
-                            // todo: Uninstall self
-                        }
-                        Ok(WsMessage::Live) => {
-                            info!(
-                                "[ws] Starting live relay of system metrics to agent: {}",
-                                addr
-                            );
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                let process_id =
-                                    start_metrics_command(addr, tx_clone.clone()).await;
-                                let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(format!(
-                                    "Started live metrics with thread ID: {}",
-                                    process_id
-                                ))));
-                            });
-                        }
-                        Ok(WsMessage::StartService { service_name }) => {
-                            let systemctl = systemctl::SystemCtl::default();
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                match systemctl.start(&service_name) {
-                                    Ok(_) => {
                                         let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!("Started service: {}", service_name),
+                                            format!("Invalid origin for service command"),
                                         )));
                                     }
-                                    Err(e) => {
-                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!(
-                                                "Failed to start service {}: {}",
-                                                service_name, e
-                                            ),
-                                        )));
-                                    }
-                                }
-                            });
-                        }
-                        Ok(WsMessage::StopService { service_name }) => {
-                            let systemctl = systemctl::SystemCtl::default();
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                match systemctl.stop(&service_name) {
-                                    Ok(_) => {
-                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!("Stopped service: {}", service_name),
-                                        )));
-                                    }
-                                    Err(e) => {
-                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!(
-                                                "Failed to stop service {}: {}",
-                                                service_name, e
-                                            ),
-                                        )));
-                                    }
-                                }
-                            });
-                        }
-                        Ok(WsMessage::RestartService { service_name }) => {
-                            let systemctl = systemctl::SystemCtl::default();
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                match systemctl.restart(&service_name) {
-                                    Ok(status) => {
-                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!("Restarted service: {}", status),
-                                        )));
-                                    }
-                                    Err(e) => {
-                                        let _ = tx_clone.try_send(Message::Text(Utf8Bytes::from(
-                                            format!(
-                                                "Failed to restart service {}: {}",
-                                                service_name, e
-                                            ),
-                                        )));
-                                    }
-                                }
-                            });
-                        }
-                        Ok(WsMessage::EOF) | Err(_) | _ => {
-                            let peers_thread = peers_clone.clone();
-                            tokio::spawn(async move {
-                                peers_thread.lock().await.remove(&addr);
-                            });
-                            return future::err(tokio_tungstenite::tungstenite::Error::Protocol(
-                                HandshakeIncomplete,
-                            ));
+                                });
+                            }
+                            Ok(WsMessage::EOF) | Err(_) | _ => {
+                                let peers_thread = peers_clone.clone();
+                                tokio::spawn(async move {
+                                    peers_thread.lock().await.remove(&addr);
+                                });
+                                return future::err(
+                                    tokio_tungstenite::tungstenite::Error::Protocol(
+                                        HandshakeIncomplete,
+                                    ),
+                                );
+                            }
                         }
                     }
-                }
-                future::ok(())
-            });
+                    future::ok(())
+                });
 
-            // Forward messages from rx thread to outgoing websocket stream
-            let outgoing_messages = async move {
-                while let Some(msg) = rx.recv().await {
-                    if let Err(e) = outgoing.send(msg).await {
-                        error!("[ws] Failed to send message to {}: {}", addr, e);
-                        break;
-                    }
-                }
-            };
-
-            // Run both tasks concurrently
-            tokio::select! {
-                _ = incoming_messages => {},
-                _ = outgoing_messages => {},
-            }
-
-            info!("{} disconnected", &addr);
-            peers_clone.lock().await.remove(&addr);
-            tokio::spawn(async move {
-                let mut live_metrics = LIVE_METRICS.lock().await;
-                if let Some((child_handle, terminate_signal)) = live_metrics.remove(&addr) {
-                    info!("[ws] Stopping live metrics for {}", addr);
-                    terminate_signal.notify_one();
-                    if let Some(child) = child_handle.lock().await.as_mut() {
-                        if let Err(e) = child.kill().await {
-                            info!("[ws] Failed to stop live metrics for {}: {}", addr, e);
-                        } else {
-                            info!("[ws] Stopped live metrics for {}", addr);
+                // Forward messages from rx thread to outgoing websocket stream
+                let outgoing_messages = async move {
+                    while let Some(msg) = rx.recv().await {
+                        if let Err(e) = outgoing.send(msg).await {
+                            error!("[ws] Failed to send message to {}: {}", addr, e);
+                            break;
                         }
                     }
+                };
+
+                // Run both tasks concurrently
+                tokio::select! {
+                    _ = incoming_messages => {},
+                    _ = outgoing_messages => {},
                 }
+
+                info!("{} disconnected", &addr);
+                peers_clone.lock().await.remove(&addr);
+                tokio::spawn(async move {
+                    let mut live_metrics = LIVE_METRICS.lock().await;
+                    if let Some((child_handle, terminate_signal)) = live_metrics.remove(&addr) {
+                        info!("[ws] Stopping live metrics for {}", addr);
+                        terminate_signal.notify_one();
+                        if let Some(child) = child_handle.lock().await.as_mut() {
+                            if let Err(e) = child.kill().await {
+                                info!("[ws] Failed to stop live metrics for {}: {}", addr, e);
+                            } else {
+                                info!("[ws] Stopped live metrics for {}", addr);
+                            }
+                        }
+                    }
+                });
             });
         }
     });
