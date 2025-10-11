@@ -21,7 +21,10 @@ impl NotificationProcessor {
         }
     }
 
-    // Register metrics from a metrics request
+    /*
+     * register_metrics
+     * Registers available metric components used for alert logic based on the incoming MetricsRequest.
+     */
     pub async fn register_metrics(&self, metrics: &MetricsRequest) {
         if let Some(cpu_stats) = &metrics.cpu_stats {
             self.registry
@@ -69,7 +72,10 @@ impl NotificationProcessor {
         }
     }
 
-    // Load rules from the database for a specific system
+    /*
+     * load_rules
+     * Combines alert rules with their associated notifiers from the database for a given system.
+     */
     async fn load_rules(&self, system_id: i32) -> Result<Vec<(Rule, Vec<String>)>, sqlx::Error> {
         let alerts = sqlx::query(crate::queries::alert_queries::GET_ALERT_SYSTEMS)
             .bind(system_id)
@@ -134,7 +140,10 @@ impl NotificationProcessor {
         Ok(rules_with_notifiers)
     }
 
-    // Get or create a notification service for a URL
+    /*
+     * get_or_create_service
+     * Retrieves an existing notification service or creates a new one based on the provided URL.
+     */
     async fn get_or_create_service(
         &self,
         url: &str,
@@ -149,37 +158,36 @@ impl NotificationProcessor {
         Ok(services.get(url).unwrap().clone())
     }
 
-    // Process notifications for a system
+    /*
+     * notify::processor::process
+     * Processes metrics for a given system, evaluates rules, and sends notifications if rules are triggered.
+     * Called after metrics are ingested and inserted into the database.
+     */
     pub async fn process(
         &self,
         metrics: &MetricsRequest,
         system_id: i32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+        triggered_rules: &HashSet<String>,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send>> {
         // Register metrics from the request
         self.register_metrics(metrics).await;
 
-        // Load rules for this system
-        let rules = self.load_rules(system_id).await?;
+        let rules = self
+            .load_rules(system_id)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
         let evaluator = RuleEvaluator::new(&self.registry);
-
-        // Evaluate each rule
+        let mut triggerd_rules = Vec::new();
         for (rule, notifier_urls) in rules {
             if !rule.enabled {
                 continue;
             }
 
-            // Skip if there's an existing alert for this rule
-            let existing_alert = sqlx::query(crate::queries::alert_queries::GET_EXISTING_ALERT)
-                .bind(system_id)
-                .bind(rule.id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-            if existing_alert.is_some() {
+            // Skip already triggered rules in the current context
+            if triggered_rules.contains(&rule.name) {
                 continue;
             }
 
-            // Evaluate the rule
             match evaluator.evaluate_rule(&rule).await {
                 Ok(true) => {
                     info!("Rule '{}' triggered for system {}", rule.name, system_id);
@@ -212,16 +220,19 @@ impl NotificationProcessor {
                             }
                         }
                     }
+                    triggerd_rules.push(rule.name.clone());
                 }
                 Ok(false) => {
-                    // Rule conditions aren't met, nothing to do
+                    info!(
+                        "Rule '{}' not triggered for system {}",
+                        rule.name, system_id
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to evaluate rule '{}': {}", rule.name, e);
                 }
             }
         }
-
-        Ok(())
+        Ok(triggerd_rules)
     }
 }

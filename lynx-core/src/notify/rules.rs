@@ -1,5 +1,4 @@
 use super::*;
-use log::info;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -141,14 +140,6 @@ impl<'a> RuleEvaluator<'a> {
             .get_metric_value(&condition.component, &condition.metric)
             .await?;
 
-        info!(
-            "Evaluating condition: {:?}.{:?}",
-            condition.component, condition.metric
-        );
-        info!(
-            "{:?} {:?} {:?}",
-            metric_value, condition.operator, condition.value
-        );
         Ok(match condition.operator {
             Operator::GreaterThan => metric_value > condition.value,
             Operator::LessThan => metric_value < condition.value,
@@ -160,20 +151,39 @@ impl<'a> RuleEvaluator<'a> {
     }
 
     pub async fn evaluate_rule(&self, rule: &Rule) -> Result<bool, MetricError> {
-        let mut result = true;
+        let mut result = false;
+        if rule.conditions.is_empty() {
+            return Ok(false);
+        }
+        let mut and_groups: Vec<Vec<&Condition>> = Vec::new();
+        let mut current_group = Vec::new();
 
         for condition in &rule.conditions {
-            let condition_result = self.evaluate_condition(condition).await?;
+            current_group.push(condition);
 
-            match (condition.next_logical, result, condition_result) {
-                (Some(LogicalOperator::And), true, false) => return Ok(false),
-                (Some(LogicalOperator::Or), false, true) => return Ok(true),
-                (Some(LogicalOperator::And), _, _) => result &= condition_result,
-                (Some(LogicalOperator::Or), _, _) => result |= condition_result,
-                (None, _, _) => result = condition_result,
+            match condition.next_logical {
+                Some(LogicalOperator::Or) => {
+                    and_groups.push(current_group);
+                    current_group = Vec::new();
+                }
+                Some(LogicalOperator::And) | None => {}
             }
         }
+        if !current_group.is_empty() {
+            and_groups.push(current_group);
+        }
 
+        for group in and_groups {
+            let mut group_result = true;
+            for condition in group {
+                let condition_result = self.evaluate_condition(condition).await?;
+                group_result &= condition_result;
+                if !condition_result {
+                    break;
+                }
+            }
+            result |= group_result;
+        }
         Ok(result)
     }
 }
