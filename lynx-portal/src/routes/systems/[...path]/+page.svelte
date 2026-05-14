@@ -439,8 +439,9 @@
 		</p>
 		<div class="flex items-start justify-end gap-3 absolute right-0 -top-1/3">
 			<span class="icon-[fluent--alert-32-regular] text-white/80 hover:text-primary transition-colors active:scale-95 w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/alerts`}></span>
-			<CommandStream />
+			<CommandStream system={data.system} />
 			<span class="icon-[material-icon-theme--systemd] w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/services`}></span>
+			<span class="icon-[catppuccin--docker] w-6 h-6 cursor-pointer" onclick={() => window.location.href = `/systems/${data.system.id}/containers`}></span>
 		</div>
 		<div class="absolute right-0 -bottom-full h-full flex-col items-end gap-2">
 			<Select.Root type="single" bind:value={range}  onValueChange={(val) => {

@@ -7,10 +7,10 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #111210;
-  --background-alt: #1c1c1c;
-  --foreground: #171817;
-  --border: #3a3a3a;
+  --background: #121212;
+  --background-alt: #0C0C0C;
+  --foreground: rgba(255, 255, 255, .02);
+  --border: #2121A37;
   --text: #f0f0f0;
   --primary: #a8ed83;
   --secondary: rgba(108, 145, 88, 0.45);
@@ -24,6 +24,7 @@
   --radius: 5px;
   --popover: blue;
   --font-mono: "Source Code Pro", monospace;
+  --font-sans: "Inter" , sans-serif;
 }
 
 .dark {
@@ -72,12 +73,12 @@ body {
   font-weight: 400;
   background-color: var(--background);
   min-height: 100vh;
-  background-image:
+ /* background-image:
           radial-gradient(ellipse 80% 80% at 80% 90%, rgba(168, 237, 131, .08) 0%, transparent 50%),
           linear-gradient(to right, rgba(31, 31, 31, 0.3) 1px, transparent 1px),
           linear-gradient(to bottom, rgba(31, 31, 31, 0.3) 1px, transparent 1px);
   background-repeat: no-repeat, repeat, repeat;
-  background-size: 100% 100%, 100% 100%, 15px 15px, 15px 15px;
+  background-size: 100% 100%, 100% 100%, 15px 15px, 15px 15px;*/
   background-attachment: fixed;
   color: var(--text);
 }

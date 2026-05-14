@@ -100,6 +100,39 @@ export const gpuMetrics = pgTable("gpu_metrics", {
 		}).onDelete("cascade"),
 ]);
 
+export const containerMetrics = pgTable("container_metrics", {
+	time: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	containerId: integer("container_id").notNull(),
+	cpuUsage: doublePrecision("cpu_usage"),
+	memoryUsage: doublePrecision("memory_usage"),
+}, (table) => [
+	index("container_metrics_time_gpu_idx").using("btree", table.time.asc().nullsLast().op("int4_ops"), table.containerId.asc().nullsLast().op("int4_ops")),
+	index("container_metrics_time_idx").using("btree", table.time.desc().nullsFirst().op("timestamp_ops")),
+	foreignKey({
+			columns: [table.containerId],
+			foreignColumns: [containers.id],
+			name: "container_metrics_gpu_id_fk"
+		}).onDelete("cascade"),
+]);
+
+export const containers = pgTable("containers", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "containers_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	systemId: integer("system_id").notNull(),
+	dockerId: text("docker_id").notNull(),
+	name: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	state: text(),
+}, (table) => [
+	index("containers_system_id_idx").using("btree", table.systemId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+			columns: [table.systemId],
+			foreignColumns: [systems.id],
+			name: "containers_system_fk"
+		}).onDelete("cascade"),
+	unique("containers_system_idx_unique").on(table.id, table.systemId),
+]);
+
 export const services = pgTable("services", {
 	id: serial().notNull(),
 	system: integer().notNull(),
@@ -130,6 +163,24 @@ export const notifiers = pgTable("notifiers", {
 		}),
 ]);
 
+export const disks = pgTable("disks", {
+	system: integer().notNull(),
+	name: text().notNull(),
+	space: integer(),
+	used: integer(),
+	read: doublePrecision(),
+	write: doublePrecision(),
+	unit: text(),
+	time: timestamp({ withTimezone: true, mode: 'string' }).primaryKey().notNull(),
+	mountPoint: text("mount_point"),
+}, (table) => [
+	foreignKey({
+			columns: [table.system],
+			foreignColumns: [systems.id],
+			name: "disks_systems_id_fk"
+		}).onUpdate("cascade").onDelete("cascade"),
+]);
+
 export const systems = pgTable("systems", {
 	id: serial().primaryKey().notNull(),
 	hostname: text(),
@@ -158,24 +209,6 @@ export const systems = pgTable("systems", {
 			name: "systems_users_id_fk"
 		}).onUpdate("cascade").onDelete("cascade"),
 	unique("systems_hostname_key").on(table.hostname),
-]);
-
-export const disks = pgTable("disks", {
-	system: integer().notNull(),
-	name: text().notNull(),
-	space: integer(),
-	used: integer(),
-	read: doublePrecision(),
-	write: doublePrecision(),
-	unit: text(),
-	time: timestamp({ withTimezone: true, mode: 'string' }).primaryKey().notNull(),
-	mountPoint: text("mount_point"),
-}, (table) => [
-	foreignKey({
-			columns: [table.system],
-			foreignColumns: [systems.id],
-			name: "disks_systems_id_fk"
-		}).onUpdate("cascade").onDelete("cascade"),
 ]);
 
 export const alertNotifiers = pgTable("alert_notifiers", {

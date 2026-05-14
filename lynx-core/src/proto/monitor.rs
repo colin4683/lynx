@@ -344,6 +344,27 @@ pub mod system_monitor_client {
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportMetrics"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn stream_metrics(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<Message = super::MetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/StreamMetrics",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "StreamMetrics"));
+            self.inner.client_streaming(req, path, codec).await
+        }
         pub async fn report_systemctl(
             &mut self,
             request: impl tonic::IntoRequest<super::SystemctlRequest>,
@@ -473,6 +494,10 @@ pub mod system_monitor_server {
         async fn report_metrics(
             &self,
             request: tonic::Request<super::MetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
+        async fn stream_metrics(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::MetricsRequest>>,
         ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status>;
         async fn report_systemctl(
             &self,
@@ -657,6 +682,53 @@ pub mod system_monitor_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/monitor.SystemMonitor/StreamMetrics" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamMetricsSvc<T: SystemMonitor>(pub Arc<T>);
+                    impl<
+                        T: SystemMonitor,
+                    > tonic::server::ClientStreamingService<super::MetricsRequest>
+                    for StreamMetricsSvc<T> {
+                        type Response = super::Response;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::MetricsRequest>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as SystemMonitor>::stream_metrics(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamMetricsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

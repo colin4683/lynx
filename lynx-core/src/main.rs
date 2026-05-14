@@ -12,8 +12,7 @@ mod queries;
 
 use crate::cache::Cache;
 use crate::proto::monitor::system_monitor_server::SystemMonitorServer;
-use crate::services::ingest::run_metric_worker;
-use crate::services::ingest::MetricIngestItem;
+use crate::services::ingest::{run_metric_worker, IngestItem};
 use crate::services::monitor::MyMonitor;
 use log::{error, info};
 use std::net::SocketAddr;
@@ -90,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // ingest worker
-    let (metric_tx, metric_rx) = channel::<MetricIngestItem>(10_000);
+    let (metric_tx, metric_rx) = channel::<IngestItem>(10_000);
     {
         let pool_clone = db_pool.clone();
         tokio::spawn(async move {

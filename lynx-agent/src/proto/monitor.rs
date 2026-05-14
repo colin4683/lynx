@@ -344,6 +344,27 @@ pub mod system_monitor_client {
                 .insert(GrpcMethod::new("monitor.SystemMonitor", "ReportMetrics"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn stream_metrics(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<Message = super::MetricsRequest>,
+        ) -> std::result::Result<tonic::Response<super::Response>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/monitor.SystemMonitor/StreamMetrics",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("monitor.SystemMonitor", "StreamMetrics"));
+            self.inner.client_streaming(req, path, codec).await
+        }
         pub async fn report_systemctl(
             &mut self,
             request: impl tonic::IntoRequest<super::SystemctlRequest>,

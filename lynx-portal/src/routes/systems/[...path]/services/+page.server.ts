@@ -2,6 +2,7 @@ import { db } from '$lib/server/db';
 import { error } from '@sveltejs/kit';
 import { and, eq, gte, sql, sum } from 'drizzle-orm';
 import { interval } from 'drizzle-orm/pg-core';
+import type { Actions, RequestEvent } from "./$types";
 
 function parseTimeRangeToMs(range: string): number {
 	const [value, unit] = range.split(' ');

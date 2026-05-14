@@ -74,8 +74,8 @@ CREATE TABLE "sessions"
 
 CREATE TABLE "disks"
 (
-    "system"      integer                   NOT NULL,
-    "name"        text                      NOT NULL,
+    "system"      integer       NOT NULL,
+    "name"        text          NOT NULL,
     "space"       integer,
     "used"        integer,
     "read"        double precision,
@@ -83,7 +83,7 @@ CREATE TABLE "disks"
     "unit"        text,
     "time"        timestamp
                       with
-                      time zone PRIMARY KEY NOT NULL,
+                      time zone NOT NULL,
     "mount_point" text
 );
 
@@ -262,6 +262,8 @@ ALTER TABLE gpus
     ADD CONSTRAINT gpus_system_idx_key UNIQUE (system_id, gpu_index);
 ALTER TABLE containers
     ADD CONSTRAINT containers_system_docker_key UNIQUE (system_id, docker_id);
+ALTER TABLE disks
+    ADD CONSTRAINT disks_system_name_time_key UNIQUE (system, name, time);
 
 CREATE FUNCTION public.update_latest_cpu_usage() RETURNS trigger
     LANGUAGE plpgsql

@@ -6,20 +6,21 @@ use crate::proto::monitor::{
     MetricsResponse, Response as ProtoResponse, SystemInfoRequest, SystemInfoResponse,
     SystemctlRequest, SystemctlResponse,
 };
-use crate::services::ingest::{DiskEntry, MetricIngestItem};
+use crate::services::ingest::{ContainerIngestItem, DiskEntry, IngestItem, MetricIngestItem};
 use chrono::Utc;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use tokio::sync::mpsc::Sender;
+use tonic::codegen::tokio_stream::StreamExt;
 use tonic::metadata::MetadataMap;
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
 
 #[derive(Clone)]
 pub struct MyMonitor {
     pub pool: sqlx::PgPool,
     pub cache: Cache,
-    pub metric_tx: Sender<MetricIngestItem>,
+    pub metric_tx: Sender<IngestItem>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +55,75 @@ impl MyMonitor {
 
         self.cache.put_system_id(agent_key.to_string(), rec.id);
         Ok(rec.id)
+    }
+
+    async fn handle_metrics_message(
+        &self,
+        system_id: i32,
+        metrics: crate::proto::monitor::MetricsRequest,
+    ) -> Result<(), Status> {
+        let cpu = metrics
+            .cpu_stats
+            .ok_or(Status::invalid_argument("missing cpu_stats"))?;
+        let mem = metrics
+            .memory_stats
+            .ok_or(Status::invalid_argument("missing memory_stats"))?;
+        let net = metrics
+            .network_stats
+            .ok_or(Status::invalid_argument("missing network_stats"))?;
+        let load = metrics
+            .load_average
+            .ok_or(Status::invalid_argument("missing load_average"))?;
+
+        let components_json = serde_json::to_string(
+            &metrics
+                .components
+                .iter()
+                .map(|c| ComponentJSON {
+                    label: c.label.clone(),
+                    temperature: c.temperature,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or("[]".to_string());
+
+        let now = chrono::Utc::now();
+        let disks = metrics
+            .disk_stats
+            .iter()
+            .map(|d| DiskEntry {
+                name: d.name.clone(),
+                total_space: d.total_space as i64,
+                used_space: d.used_space as i64,
+                read_bytes: d.read_bytes,
+                write_bytes: d.write_bytes,
+                unit: d.unit.clone(),
+                mount_point: d.mount_point.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let item = IngestItem::Metric(MetricIngestItem {
+            system_id,
+            time: now,
+            cpu_usage: cpu.usage_percent,
+            memory_used_kb: mem.used_kb as i64,
+            memory_total_kb: mem.total_kb as i64,
+            components_json,
+            net_in: net.r#in as i64,
+            net_out: net.out as i64,
+            load_one: load.one_minute,
+            load_five: load.five_minutes,
+            load_fifteen: load.fifteen_minutes,
+            disks,
+            original: metrics,
+        });
+
+        // await send for smoothing bursts
+        if let Err(e) = self.metric_tx.send(item).await {
+            log::error!("[hub] metric queue closed: {e}");
+            return Err(Status::unavailable("ingest pipeline unavailable"));
+        }
+        Ok(())
     }
 
     async fn upsert_gpus(&self, system_id: i32, gpus: Vec<GpuInfo>) -> Result<(), Status> {
@@ -178,6 +248,22 @@ impl MyMonitor {
             return Ok(());
         }
 
+        for m in metrics {
+            let item = IngestItem::Container(ContainerIngestItem {
+                system_id,
+                docker_id: m.docker_id.clone(),
+                time: Utc::now(),
+                cpu_usage: m.cpu_usage,
+                memory_usage: m.memory_usage,
+                original: m,
+            });
+            if let Err(e) = self.metric_tx.send(item).await {
+                log::error!("[hub] container metric queue closed: {e}");
+                return Err(Status::unavailable("ingest pipeline unavailable"));
+            }
+        }
+
+        /*
         // Collect owned Strings to match expected &\[String]
         let ids: Vec<String> = metrics.iter().map(|m| m.docker_id.clone()).collect();
 
@@ -221,7 +307,7 @@ impl MyMonitor {
         qb.build().execute(&self.pool).await.map_err(|e| {
             error!("[hub] Container metrics insert error: {e}");
             Status::internal("container metrics insert failed")
-        })?;
+        })?;*/
         Ok(())
     }
 }
@@ -233,73 +319,8 @@ impl SystemMonitor for MyMonitor {
         request: Request<MetricsRequest>,
     ) -> Result<Response<ProtoResponse>, Status> {
         let system_id = self.get_system_id_from_md(request.metadata()).await?;
-
         let metrics = request.into_inner();
-        let cpu = metrics
-            .cpu_stats
-            .ok_or(Status::invalid_argument("missing cpu_stats"))?;
-        let mem = metrics
-            .memory_stats
-            .ok_or(Status::invalid_argument("missing memory_stats"))?;
-        let net = metrics
-            .network_stats
-            .ok_or(Status::invalid_argument("missing network_stats"))?;
-        let load = metrics
-            .load_average
-            .ok_or(Status::invalid_argument("missing load_average"))?;
-
-        let components_json = serde_json::to_string(
-            &metrics
-                .components
-                .iter()
-                .map(|c| ComponentJSON {
-                    label: c.label.clone(),
-                    temperature: c.temperature,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or("[]".to_string());
-
-        // single timestamp for all
-        let now = Utc::now();
-
-        // spawn thread to process notification rules
-        let disks = metrics
-            .disk_stats
-            .iter()
-            .map(|d| DiskEntry {
-                name: d.name.clone(),
-                total_space: d.total_space as i64,
-                used_space: d.used_space as i64,
-                read_bytes: d.read_bytes,
-                write_bytes: d.write_bytes,
-                unit: d.unit.clone(),
-                mount_point: d.mount_point.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        let item = MetricIngestItem {
-            system_id,
-            time: now,
-            cpu_usage: cpu.usage_percent,
-            memory_used_kb: mem.used_kb as i64,
-            memory_total_kb: mem.total_kb as i64,
-            components_json,
-            net_in: net.r#in as i64,
-            net_out: net.out as i64,
-            load_one: load.one_minute,
-            load_five: load.five_minutes,
-            load_fifteen: load.fifteen_minutes,
-            disks,
-            original: metrics,
-        };
-
-        if let Err(e) = self.metric_tx.try_send(item) {
-            error!("[hub] metric queue full: {e}");
-            return Err(Status::resource_exhausted("ingest queue full"));
-        }
-
-        info!("[hub] Metric log successfully saved");
+        self.handle_metrics_message(system_id, metrics).await?;
         // record lightweight log in cache
         let cache = self.cache.clone();
         tokio::spawn(async move {
@@ -308,6 +329,41 @@ impl SystemMonitor for MyMonitor {
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "Metrics reported successfully".to_string(),
+        }))
+    }
+
+    async fn stream_metrics(
+        &self,
+        request: Request<Streaming<MetricsRequest>>,
+    ) -> Result<Response<ProtoResponse>, Status> {
+        let system_id = self.get_system_id_from_md(request.metadata()).await?;
+        let mut inbound = request.into_inner();
+        let mut count: u64 = 0;
+
+        while let Some(msg) = inbound.next().await {
+            match msg {
+                Ok(m) => {
+                    if let Err(e) = self.handle_metrics_message(system_id, m).await {
+                        return Err(e);
+                    }
+                    count += 1;
+                    if count % 500 == 0 {
+                        info!(
+                            "[hub] stream_metrics processed {count} messages (system {system_id})"
+                        );
+                    }
+                }
+                Err(status) => {
+                    log::warn!("[hub] stream_metrics error (system {system_id}): {status}");
+                    return Err(Status::aborted("stream receive error"));
+                }
+            }
+        }
+
+        info!("[hub] stream_metrics closed gracefully (system {system_id}, messages={count})");
+        Ok(tonic::Response::new(crate::proto::monitor::Response {
+            status: "200".into(),
+            message: format!("stream closed after {count} messages"),
         }))
     }
 
@@ -333,7 +389,6 @@ impl SystemMonitor for MyMonitor {
         let request = request.into_inner();
         self.insert_gpu_metrics(system_id.into(), request.gpu_metrics)
             .await?;
-        info!("[hub] GPU metrics updated successfully");
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "GPU metrics reported successfully".to_string(),
@@ -485,7 +540,6 @@ impl SystemMonitor for MyMonitor {
         let body = request.into_inner();
         self.insert_container_metrics(system_id.into(), body.container_metrics)
             .await?;
-        info!("[hub] Container metrics updated successfully");
         Ok(Response::new(ProtoResponse {
             status: "200".to_string(),
             message: "Container metrics successfully".to_string(),

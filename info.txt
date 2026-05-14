@@ -1,0 +1,8 @@
+Lynx is a server monitoring project. The idea is there exists a core which is the central hub that stores all of the metrics it receives from the various agents. There is also a portal which is a svelte application that connects to the database and visualizes the data with charts, etc. I wanted this project to be super modular so every service can be ran on separate devices allowing for easy micro-service architecture. 
+
+The lynx-agent is multi-threaded Rust-based system agent designed to securely collect, monitor, and transmit system information. It works as follows:
+On startup, it loads configuration from config.toml and initializes secure communication using TLS certificates from the certs/ directory.
+The agent uses modular collectors to gather system metrics and information.
+Data is transmitted to remote services using gRPC and has WebSocket support to allow the portal to execute commands. The agent is extensible, allowing new collectors or communication protocols to be added easily. It is designed for robust, secure operation (uses hash verification for data validity), supporting integration with monitoring solutions and other services.
+
+The core is also a rust application that serves as the central hub. This application receives the gRPC messages from any connected agents to store the metric data, generate new agents for deployment and process any notifications that need to be notified. Data is stored in a timescale postgres database

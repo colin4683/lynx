@@ -4,7 +4,8 @@
 	import { DialogHeader, DialogTitle } from '$lib/components/ui/dialog/index.js';
 	import { fly, fade } from 'svelte/transition';
 	import { tick } from 'svelte';
-
+	let {system} = $props<any>();
+	console.log('CommandStream data:', system);
 	let command = $state('');
 	let output = $state<string[]>([]);
 	let executing = $state(false);
@@ -21,7 +22,7 @@
 
 		if (socket) socket.close();
 
-		socket = new WebSocket("ws://127.0.0.1:8080");
+		socket = new WebSocket(`ws://${system.address}:8080`);
 
 		socket.onopen = () => {
 			socket?.send(JSON.stringify({

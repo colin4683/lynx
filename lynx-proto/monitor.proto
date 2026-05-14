@@ -5,6 +5,7 @@ package monitor;
 service SystemMonitor {
     rpc GetSystemInfo (SystemInfoRequest) returns (Response);
     rpc ReportMetrics (MetricsRequest) returns (Response);
+    rpc StreamMetrics (stream MetricsRequest) returns (Response);
     rpc ReportSystemctl (SystemctlRequest) returns (Response);
     rpc RegisterGPUs (GpuRequest) returns (Response);
     rpc ReportGPUMetrics (GpuMetricsRequest) returns (Response);

@@ -23,7 +23,8 @@ impl NotificationProcessor {
 
     /*
      * register_metrics
-     * Registers available metric components used for alert logic based on the incoming MetricsRequest.
+     * Registers available metric components used for alert logic based on the incoming
+     * MetricsRequest.
      */
     pub async fn register_metrics(&self, metrics: &MetricsRequest) {
         if let Some(cpu_stats) = &metrics.cpu_stats {
@@ -160,8 +161,8 @@ impl NotificationProcessor {
 
     /*
      * notify::processor::process
-     * Processes metrics for a given system, evaluates rules, and sends notifications if rules are triggered.
-     * Called after metrics are ingested and inserted into the database.
+     * Processes metrics for a given system, evaluates rules, and sends notifications if rules
+     * are triggered. Called after metrics are ingested and inserted into the database.
      */
     pub async fn process(
         &self,
@@ -222,12 +223,7 @@ impl NotificationProcessor {
                     }
                     triggerd_rules.push(rule.name.clone());
                 }
-                Ok(false) => {
-                    info!(
-                        "Rule '{}' not triggered for system {}",
-                        rule.name, system_id
-                    );
-                }
+                Ok(false) => {}
                 Err(e) => {
                     warn!("Failed to evaluate rule '{}': {}", rule.name, e);
                 }

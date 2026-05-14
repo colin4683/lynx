@@ -135,6 +135,40 @@ export const gpuMetrics = pgTable("gpu_metrics", {
 	}).onDelete("cascade"),
 ]);
 
+export const containerMetrics = pgTable("container_metrics", {
+	time: timestamp({ mode: 'string' }).defaultNow().notNull(),
+	containerId: integer("container_id").notNull(),
+	cpuUsage: doublePrecision("cpu_usage"),
+	memoryUsage: doublePrecision("memory_usage"),
+}, (table) => [
+	index("container_metrics_time_gpu_idx").using("btree", table.time.asc().nullsLast().op("int4_ops"), table.containerId.asc().nullsLast().op("int4_ops")),
+	index("container_metrics_time_idx").using("btree", table.time.desc().nullsFirst().op("timestamp_ops")),
+	foreignKey({
+		columns: [table.containerId],
+		foreignColumns: [containers.id],
+		name: "container_metrics_gpu_id_fk"
+	}).onDelete("cascade"),
+]);
+
+export const containers = pgTable("containers", {
+	id: integer().primaryKey().generatedAlwaysAsIdentity({ name: "containers_id_seq", startWith: 1, increment: 1, minValue: 1, maxValue: 2147483647, cache: 1 }),
+	systemId: integer("system_id").notNull(),
+	dockerId: text("docker_id").notNull(),
+	name: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	state: text(),
+}, (table) => [
+	index("containers_system_id_idx").using("btree", table.systemId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+		columns: [table.systemId],
+		foreignColumns: [systems.id],
+		name: "containers_system_fk"
+	}).onDelete("cascade"),
+	unique("containers_system_idx_unique").on(table.id, table.systemId),
+]);
+
+
 export const services = pgTable("services", {
 	id: serial().notNull(),
 	system: integer().notNull(),
@@ -276,6 +310,7 @@ export const usersRelations = relations(users, ({many}) => ({
 export const systemsRelations = relations(systems, ({one, many}) => ({
 	alertSystems: many(alertSystems),
 	services: many(services),
+	containers: many(containers),
 	gpuses: many(gpus),
 	user: one(users, {
 		fields: [systems.admin],
@@ -300,7 +335,20 @@ export const gpuMetricsRelations = relations(gpuMetrics, ({one}) => ({
 		references: [gpus.id]
 	}),
 }));
+export const containerMetricsRelations = relations(containerMetrics, ({one}) => ({
+	container: one(containers, {
+		fields: [containerMetrics.containerId],
+		references: [containers.id]
+	}),
+}));
 
+export const containersRelations = relations(containers, ({one, many}) => ({
+	containerMetrics: many(containerMetrics),
+	system: one(systems, {
+		fields: [containers.systemId],
+		references: [systems.id]
+	}),
+}));
 export const servicesRelations = relations(services, ({one}) => ({
 	system: one(systems, {
 		fields: [services.system],

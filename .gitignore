@@ -20,3 +20,5 @@ lynx-agent/agent.log
 lynx-core/core.log
 
 deploy/.env
+
+lynx-scripts/

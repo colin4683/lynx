@@ -15,6 +15,13 @@
       "when": 1751494946972,
       "tag": "0001_minor_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1757793240141,
+      "tag": "0002_keen_pretty_boy",
+      "breakpoints": true
     }
   ]
 }
